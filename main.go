@@ -58,7 +58,6 @@ import "C"
 import (
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"strings"
 	"sync/atomic"
 	"unsafe"
@@ -193,9 +192,9 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 	case pluginabi.MethodAuthParse:
 		return parseAuth(request)
 	case pluginabi.MethodAuthLoginStart:
-		return errorEnvelope("unsupported_auth", "Kiro provider supports API-key authentication only", http.StatusBadRequest, false), nil
+		return startLogin(request)
 	case pluginabi.MethodAuthLoginPoll:
-		return okEnvelope(pluginapi.AuthLoginPollResponse{Status: pluginapi.AuthLoginStatusError, Message: "Kiro provider supports API-key authentication only"})
+		return pollLogin(request)
 	case pluginabi.MethodAuthRefresh:
 		return refreshAuth(request)
 	case pluginabi.MethodExecutorExecute:

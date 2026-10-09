@@ -363,21 +363,11 @@ func oidcHeaders() http.Header {
 }
 
 // postJSON sends a request through the host HTTP transport (so the selected
-// auth's proxy policy applies) and decodes a JSON response.
+// auth's proxy policy applies) and decodes a 2xx JSON response.
 func postJSON(hostCallbackID, endpoint string, headers http.Header, body []byte, out any) error {
-	rawResponse, errCall := invokeHost(pluginabi.MethodHostHTTPDo, rpcHostHTTPRequest{
-		HostCallbackID: hostCallbackID,
-		Method:         http.MethodPost,
-		URL:            endpoint,
-		Headers:        headers,
-		Body:           body,
-	})
-	if errCall != nil {
-		return fmt.Errorf("call %s: %w", redactURL(endpoint), errCall)
-	}
-	var response pluginapi.HTTPResponse
-	if errUnmarshal := json.Unmarshal(rawResponse, &response); errUnmarshal != nil {
-		return fmt.Errorf("decode host HTTP response: %w", errUnmarshal)
+	response, errPost := hostPost(hostCallbackID, endpoint, headers, body)
+	if errPost != nil {
+		return errPost
 	}
 	if response.StatusCode < 200 || response.StatusCode > 299 {
 		return &tokenRefreshError{status: response.StatusCode, detail: limitedErrorBody(response.Body)}
@@ -389,6 +379,26 @@ func postJSON(hostCallbackID, endpoint string, headers http.Header, body []byte,
 		return fmt.Errorf("decode %s response: %w", redactURL(endpoint), errUnmarshal)
 	}
 	return nil
+}
+
+// hostPost sends a POST through the host HTTP transport and returns the raw
+// response, leaving status handling to the caller.
+func hostPost(hostCallbackID, endpoint string, headers http.Header, body []byte) (pluginapi.HTTPResponse, error) {
+	rawResponse, errCall := invokeHost(pluginabi.MethodHostHTTPDo, rpcHostHTTPRequest{
+		HostCallbackID: hostCallbackID,
+		Method:         http.MethodPost,
+		URL:            endpoint,
+		Headers:        headers,
+		Body:           body,
+	})
+	if errCall != nil {
+		return pluginapi.HTTPResponse{}, fmt.Errorf("call %s: %w", redactURL(endpoint), errCall)
+	}
+	var response pluginapi.HTTPResponse
+	if errUnmarshal := json.Unmarshal(rawResponse, &response); errUnmarshal != nil {
+		return pluginapi.HTTPResponse{}, fmt.Errorf("decode host HTTP response: %w", errUnmarshal)
+	}
+	return response, nil
 }
 
 func redactURL(endpoint string) string {
