@@ -121,7 +121,23 @@ func executeStream(raw []byte) ([]byte, error) {
 	if errPrepare != nil {
 		return prepareRequestErrorEnvelope(errPrepare), nil
 	}
-	go runStream(request, upstream, payload)
+	// Open the upstream before acknowledging the stream. Quota, auth, and
+	// rate-limit failures then reach CPA as a typed error envelope carrying
+	// status, retry hint, and credential scope; once a stream is acknowledged,
+	// later errors can only travel as a message string.
+	var opened openedUpstream
+	for attempt := 1; ; attempt++ {
+		var status int
+		var errOpen error
+		opened, status, errOpen = openUpstream(request.HostCallbackID, upstream, attempt)
+		if errOpen == nil {
+			break
+		}
+		if !retryableUpstream(status, errOpen) || attempt == maxAttempts {
+			return upstreamErrorEnvelope(status, errOpen), nil
+		}
+	}
+	go runStream(request, upstream, payload, opened)
 	return okEnvelope(map[string]any{"headers": http.Header{"Content-Type": []string{"text/event-stream"}}})
 }
 
@@ -132,7 +148,9 @@ func prepareRequestErrorEnvelope(errPrepare error) []byte {
 	return errorEnvelope("invalid_request", errPrepare.Error(), http.StatusBadRequest, false)
 }
 
-func runStream(request rpcExecutorRequest, upstream upstreamRequest, payload *kiroPayload) {
+// runStream relays an already opened upstream stream and, if it fails before
+// any client output, retries on a fresh upstream request.
+func runStream(request rpcExecutorRequest, upstream upstreamRequest, payload *kiroPayload, first openedUpstream) {
 	var terminalErr error
 	defer func() {
 		if recovered := recover(); recovered != nil {
@@ -145,7 +163,7 @@ func runStream(request rpcExecutorRequest, upstream upstreamRequest, payload *ki
 		accumulator := newAccumulator(payload)
 		writer := newClaudeSSEWriter(accumulator)
 		clientEmitted := false
-		emitted, status, errRun := consumeUpstream(request.HostCallbackID, upstream, attempt, func(events []kiroEvent) error {
+		onEvents := func(events []kiroEvent) error {
 			for _, event := range events {
 				blocks, errAccept := accumulator.accept(event)
 				if errAccept != nil {
@@ -173,7 +191,15 @@ func runStream(request rpcExecutorRequest, upstream upstreamRequest, payload *ki
 				}
 			}
 			return nil
-		})
+		}
+		var emitted bool
+		var status int
+		var errRun error
+		if attempt == 1 {
+			emitted, status, errRun = readOpenedUpstream(first, onEvents)
+		} else {
+			emitted, status, errRun = consumeUpstream(request.HostCallbackID, upstream, attempt, onEvents)
+		}
 		if errRun == nil {
 			blockCount := len(accumulator.Blocks)
 			if errFinish := accumulator.finish(); errFinish != nil {
@@ -266,7 +292,15 @@ func prepareUpstreamRequest(request pluginapi.ExecutorRequest) (upstreamRequest,
 	return upstreamRequest{URL: endpoint, Headers: headers, Body: body}, payload, nil
 }
 
-func consumeUpstream(hostCallbackID string, request upstreamRequest, attempt int, onEvents func([]kiroEvent) error) (bool, int, error) {
+// openedUpstream is a Kiro runtime stream that answered 200.
+type openedUpstream struct {
+	streamID string
+	status   int
+}
+
+// openUpstream starts the runtime request and classifies a non-200 answer, so
+// callers learn about quota and auth failures before reporting success.
+func openUpstream(hostCallbackID string, request upstreamRequest, attempt int) (openedUpstream, int, error) {
 	headers := request.Headers.Clone()
 	headers.Set("Amz-Sdk-Request", fmt.Sprintf("attempt=%d; max=%d", attempt, maxAttempts))
 	headers.Set("Amz-Sdk-Invocation-Id", randomUUID())
@@ -278,21 +312,36 @@ func consumeUpstream(hostCallbackID string, request upstreamRequest, attempt int
 		Body:           request.Body,
 	})
 	if errCall != nil {
-		return false, 0, fmt.Errorf("start Kiro upstream stream: %w", errCall)
+		return openedUpstream{}, 0, fmt.Errorf("start Kiro upstream stream: %w", errCall)
 	}
 	var response rpcHostHTTPStreamResponse
 	if errUnmarshal := json.Unmarshal(rawResponse, &response); errUnmarshal != nil {
-		return false, 0, fmt.Errorf("decode Kiro upstream response: %w", errUnmarshal)
+		return openedUpstream{}, 0, fmt.Errorf("decode Kiro upstream response: %w", errUnmarshal)
 	}
 	if strings.TrimSpace(response.StreamID) == "" {
-		return false, response.StatusCode, fmt.Errorf("Kiro upstream returned no stream")
+		return openedUpstream{}, response.StatusCode, fmt.Errorf("Kiro upstream returned no stream")
 	}
-	defer closeHostHTTPStream(response.StreamID)
 	if response.StatusCode != http.StatusOK {
 		body, _ := readErrorBody(response.StreamID, 4096)
-		return false, response.StatusCode, fmt.Errorf("Kiro upstream HTTP %d: %s", response.StatusCode, strings.TrimSpace(string(body)))
+		closeHostHTTPStream(response.StreamID)
+		classified := classifyUpstreamError(response.StatusCode, response.Headers, body)
+		return openedUpstream{}, classified.status, classified
 	}
+	return openedUpstream{streamID: response.StreamID, status: response.StatusCode}, response.StatusCode, nil
+}
 
+func consumeUpstream(hostCallbackID string, request upstreamRequest, attempt int, onEvents func([]kiroEvent) error) (bool, int, error) {
+	opened, status, errOpen := openUpstream(hostCallbackID, request, attempt)
+	if errOpen != nil {
+		return false, status, errOpen
+	}
+	return readOpenedUpstream(opened, onEvents)
+}
+
+// readOpenedUpstream decodes an opened runtime stream and closes it.
+func readOpenedUpstream(opened openedUpstream, onEvents func([]kiroEvent) error) (bool, int, error) {
+	response := rpcHostHTTPStreamResponse{StreamID: opened.streamID, StatusCode: opened.status}
+	defer closeHostHTTPStream(response.StreamID)
 	decoder := &eventStreamDecoder{}
 	emitted := false
 	for {
@@ -383,6 +432,12 @@ func retryableUpstream(status int, errValue error) bool {
 	if errValue == nil {
 		return false
 	}
+	var classified *upstreamError
+	if errors.As(errValue, &classified) && classified.reason == reasonMonthlyRequestCount {
+		// The account is out of quota until the monthly reset; retrying the same
+		// credential only burns time before CPA can move to another account.
+		return false
+	}
 	if status == http.StatusUnauthorized || status == http.StatusForbidden || status == http.StatusPaymentRequired || status == http.StatusBadRequest {
 		return false
 	}
@@ -393,18 +448,37 @@ func upstreamErrorEnvelope(status int, errValue error) []byte {
 	if errValue == nil {
 		errValue = fmt.Errorf("Kiro upstream request failed")
 	}
+	var classified *upstreamError
+	isClassified := errors.As(errValue, &classified)
+	if isClassified {
+		status = classified.status
+	}
 	if status == 0 {
 		status = http.StatusBadGateway
 	}
 	code := "upstream_error"
-	if status == http.StatusUnauthorized || status == http.StatusForbidden {
-		code = "invalid_auth"
-	} else if status == http.StatusTooManyRequests {
+	switch {
+	case isClassified && classified.reason == reasonMonthlyRequestCount:
 		code = "quota_exhausted"
-	} else if status == http.StatusPaymentRequired {
+	case status == http.StatusUnauthorized || status == http.StatusForbidden:
+		code = "invalid_auth"
+	case status == http.StatusTooManyRequests:
+		code = "rate_limited"
+	case status == http.StatusPaymentRequired:
 		code = "billing_required"
 	}
-	return errorEnvelope(code, errValue.Error(), status, retryableUpstream(status, errValue))
+	pluginErr := &pluginabi.Error{
+		Code:       code,
+		Message:    errValue.Error(),
+		HTTPStatus: status,
+		Retryable:  retryableUpstream(status, errValue),
+	}
+	if isClassified {
+		pluginErr.RetryAfterMS = classified.retryAfter.Milliseconds()
+		pluginErr.CredentialScoped = classified.credentialScoped
+	}
+	raw, _ := json.Marshal(envelope{OK: false, Error: pluginErr})
+	return raw
 }
 
 func countTokens(raw []byte) ([]byte, error) {
