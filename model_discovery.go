@@ -76,12 +76,12 @@ func accountModels(request rpcAuthModelRequest) ([]pluginapi.ModelInfo, error) {
 	if !handled {
 		return configuredModels(), fmt.Errorf("selected auth is not a Kiro credential")
 	}
-	key, errKey := resolveAPIKey(credential)
+	key, errKey := bearerToken(credential)
 	if errKey != nil {
-		return configuredModels(), fmt.Errorf("resolve API key: %w", errKey)
+		return configuredModels(), fmt.Errorf("resolve credential: %w", errKey)
 	}
 
-	cacheKey := modelCacheKey(request.AuthID, credential.Region, key)
+	cacheKey := modelCacheKey(request.AuthID, credential.runtimeRegion(), firstNonEmpty(credential.ProfileARN, key))
 	if models, okCache := cachedAccountModels(cacheKey, true); okCache {
 		return filterDiscoveredModels(models), nil
 	}
@@ -104,7 +104,7 @@ func fetchAvailableModels(hostCallbackID string, credential kiroCredential, key 
 	nextToken := ""
 
 	for page := 0; page < modelDiscoveryMaxPages; page++ {
-		endpoint, errEndpoint := modelDiscoveryURL(credential.Region, nextToken)
+		endpoint, errEndpoint := modelDiscoveryURL(credential.runtimeRegion(), credential.ProfileARN, nextToken)
 		if errEndpoint != nil {
 			return nil, errEndpoint
 		}
@@ -112,7 +112,7 @@ func fetchAvailableModels(hostCallbackID string, credential kiroCredential, key 
 			HostCallbackID: hostCallbackID,
 			Method:         http.MethodGet,
 			URL:            endpoint,
-			Headers:        modelDiscoveryHeaders(key),
+			Headers:        modelDiscoveryHeaders(credential, key),
 		})
 		if errCall != nil {
 			return nil, fmt.Errorf("call model-list endpoint: %w", errCall)
@@ -155,13 +155,16 @@ func fetchAvailableModels(hostCallbackID string, credential kiroCredential, key 
 	return models, nil
 }
 
-func modelDiscoveryURL(region, nextToken string) (string, error) {
+func modelDiscoveryURL(region, profileARN, nextToken string) (string, error) {
 	if !regionPattern.MatchString(region) {
 		return "", fmt.Errorf("invalid Kiro region %q", region)
 	}
 	query := url.Values{
 		"origin":     []string{"AI_EDITOR"},
 		"maxResults": []string{fmt.Sprintf("%d", modelDiscoveryPageSize)},
+	}
+	if profileARN != "" {
+		query.Set("profileArn", profileARN)
 	}
 	if nextToken != "" {
 		query.Set("nextToken", nextToken)
@@ -173,9 +176,9 @@ func modelDiscoveryURL(region, nextToken string) (string, error) {
 	return "https://" + host + "/ListAvailableModels?" + query.Encode(), nil
 }
 
-func modelDiscoveryHeaders(key string) http.Header {
+func modelDiscoveryHeaders(credential kiroCredential, key string) http.Header {
 	cfg := loadedConfig()
-	machine := machineID(key)
+	machine := machineID(credential, key)
 	userAgent := fmt.Sprintf(
 		"aws-sdk-js/%s ua/2.1 os/%s lang/js md/nodejs#%s api/codewhispererruntime#%s m/N,E KiroIDE-%s-%s",
 		kiroRuntimeSDKVersion,
@@ -186,14 +189,14 @@ func modelDiscoveryHeaders(key string) http.Header {
 		machine,
 	)
 	amzUserAgent := fmt.Sprintf("aws-sdk-js/%s KiroIDE-%s-%s", kiroRuntimeSDKVersion, cfg.KiroVersion, machine)
-	return http.Header{
+	headers := http.Header{
 		"Accept":                      []string{"application/json"},
-		"Authorization":               []string{"Bearer " + key},
-		"Tokentype":                   []string{"API_KEY"},
 		"User-Agent":                  []string{userAgent},
 		"X-Amz-User-Agent":            []string{amzUserAgent},
 		"X-Amzn-Codewhisperer-Optout": []string{"true"},
 	}
+	applyAuthHeaders(headers, credential, key)
+	return headers
 }
 
 func discoveredModelInfo(model kiroAvailableModel) pluginapi.ModelInfo {

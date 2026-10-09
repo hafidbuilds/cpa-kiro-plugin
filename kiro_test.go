@@ -89,7 +89,7 @@ func TestModelsForAuthDiscoversPaginatesAndCaches(t *testing.T) {
 		if request.Headers.Get("Authorization") != "Bearer test-discovery-key" || request.Headers.Get("TokenType") != "API_KEY" {
 			t.Fatalf("discovery headers = %#v", request.Headers)
 		}
-		machine := machineID("test-discovery-key")
+		machine := machineID(kiroCredential{AuthMethod: authMethodAPIKey}, "test-discovery-key")
 		if !strings.Contains(request.Headers.Get("User-Agent"), "api/codewhispererruntime#1.0.0") ||
 			!strings.HasSuffix(request.Headers.Get("User-Agent"), "-"+machine) ||
 			!strings.HasSuffix(request.Headers.Get("X-Amz-User-Agent"), "-"+machine) ||
@@ -163,7 +163,7 @@ func TestModelDiscoveryURLUsesKiroGoRegionalHosts(t *testing.T) {
 		{region: "eu-central-1", host: "q.eu-central-1.amazonaws.com"},
 	}
 	for _, test := range tests {
-		rawURL, errURL := modelDiscoveryURL(test.region, "")
+		rawURL, errURL := modelDiscoveryURL(test.region, "", "")
 		if errURL != nil {
 			t.Fatalf("modelDiscoveryURL(%q) error = %v", test.region, errURL)
 		}

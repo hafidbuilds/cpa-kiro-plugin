@@ -11,9 +11,11 @@ type kiroPayload struct {
 		CurrentMessage      kiroCurrentMessage   `json:"currentMessage"`
 		History             []kiroHistoryMessage `json:"history,omitempty"`
 	} `json:"conversationState"`
-	InferenceConfig      *kiroInferenceConfig `json:"inferenceConfig,omitempty"`
-	ToolNameMap          map[string]string    `json:"-"`
-	EstimatedInputTokens int                  `json:"-"`
+	InferenceConfig *kiroInferenceConfig `json:"inferenceConfig,omitempty"`
+	// ProfileARN is required for OAuth tokens and omitted for API keys.
+	ProfileARN           string            `json:"profileArn,omitempty"`
+	ToolNameMap          map[string]string `json:"-"`
+	EstimatedInputTokens int               `json:"-"`
 }
 
 type kiroCurrentMessage struct {

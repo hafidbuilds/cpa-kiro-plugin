@@ -120,6 +120,11 @@ type rpcAuthModelRequest struct {
 	HostCallbackID string `json:"host_callback_id,omitempty"`
 }
 
+type rpcAuthRefreshRequest struct {
+	pluginapi.AuthRefreshRequest
+	HostCallbackID string `json:"host_callback_id,omitempty"`
+}
+
 var currentConfig atomic.Value
 
 func main() {}

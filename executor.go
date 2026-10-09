@@ -224,39 +224,45 @@ func prepareUpstreamRequest(request pluginapi.ExecutorRequest) (upstreamRequest,
 		return upstreamRequest{}, nil, errCredential
 	}
 	if !handled {
-		return upstreamRequest{}, nil, fmt.Errorf("selected auth is not a Kiro API-key credential")
+		return upstreamRequest{}, nil, fmt.Errorf("selected auth is not a Kiro credential")
 	}
-	key, errKey := resolveAPIKey(credential)
-	if errKey != nil {
-		return upstreamRequest{}, nil, errKey
+	token, errToken := bearerToken(credential)
+	if errToken != nil {
+		return upstreamRequest{}, nil, errToken
+	}
+	if credential.isOAuth() && credential.ProfileARN == "" {
+		return upstreamRequest{}, nil, fmt.Errorf("%w: OAuth credential has no profile_arn", errKiroAPIKeyUnavailable)
 	}
 	payload, _, errTranslate := claudeToKiro(request.Payload, request.Model)
 	if errTranslate != nil {
 		return upstreamRequest{}, nil, errTranslate
 	}
+	if credential.isOAuth() {
+		payload.ProfileARN = credential.ProfileARN
+	}
 	body, errMarshal := json.Marshal(payload)
 	if errMarshal != nil {
 		return upstreamRequest{}, nil, fmt.Errorf("encode Kiro request: %w", errMarshal)
 	}
-	endpoint := "https://runtime." + credential.Region + ".kiro.dev/"
+	region := credential.runtimeRegion()
+	endpoint := "https://runtime." + region + ".kiro.dev/"
 	parsed, errParse := url.Parse(endpoint)
-	if errParse != nil || parsed.Scheme != "https" || parsed.Hostname() != "runtime."+credential.Region+".kiro.dev" {
+	if errParse != nil || parsed.Scheme != "https" || parsed.Hostname() != "runtime."+region+".kiro.dev" {
 		return upstreamRequest{}, nil, fmt.Errorf("invalid Kiro endpoint")
 	}
 	cfg := loadedConfig()
-	machine := machineID(key)
+	machine := machineID(credential, token)
 	userAgent := fmt.Sprintf("aws-sdk-js/1.0.34 ua/2.1 os/%s lang/js md/nodejs#%s api/codewhispererstreaming#1.0.34 m/E KiroIDE-%s-%s", cfg.SystemVersion, cfg.NodeVersion, cfg.KiroVersion, machine)
 	amzUserAgent := fmt.Sprintf("aws-sdk-js/1.0.34 KiroIDE-%s-%s", cfg.KiroVersion, machine)
 	headers := http.Header{
 		"Accept":                      []string{"*/*"},
-		"Authorization":               []string{"Bearer " + key},
 		"Content-Type":                []string{"application/x-amz-json-1.0"},
-		"Tokentype":                   []string{"API_KEY"},
 		"User-Agent":                  []string{userAgent},
 		"X-Amz-Target":                []string{kiroAmzTarget},
 		"X-Amz-User-Agent":            []string{amzUserAgent},
 		"X-Amzn-Codewhisperer-Optout": []string{"true"},
 	}
+	applyAuthHeaders(headers, credential, token)
 	return upstreamRequest{URL: endpoint, Headers: headers, Body: body}, payload, nil
 }
 
@@ -429,18 +435,18 @@ func executorHTTPRequest(raw []byte) ([]byte, error) {
 	if errCredential != nil || !handled {
 		return errorEnvelope("invalid_auth", "selected auth is not a Kiro credential", http.StatusUnauthorized, false), nil
 	}
-	endpoint := "https://runtime." + credential.Region + ".kiro.dev/"
+	region := credential.runtimeRegion()
+	endpoint := "https://runtime." + region + ".kiro.dev/"
 	parsed, errParse := url.Parse(request.URL)
-	if errParse != nil || parsed.Scheme != "https" || parsed.Hostname() != "runtime."+credential.Region+".kiro.dev" {
+	if errParse != nil || parsed.Scheme != "https" || parsed.Hostname() != "runtime."+region+".kiro.dev" {
 		return errorEnvelope("invalid_request", "Kiro HTTP bridge only permits the configured runtime host", http.StatusBadRequest, false), nil
 	}
-	key, errKey := resolveAPIKey(credential)
-	if errKey != nil {
-		return errorEnvelope("invalid_auth", errKey.Error(), http.StatusUnauthorized, false), nil
+	token, errToken := bearerToken(credential)
+	if errToken != nil {
+		return errorEnvelope("invalid_auth", errToken.Error(), http.StatusUnauthorized, false), nil
 	}
 	headers := request.Headers.Clone()
-	headers.Set("Authorization", "Bearer "+key)
-	headers.Set("tokentype", "API_KEY")
+	applyAuthHeaders(headers, credential, token)
 	resultRaw, errCall := invokeHost(pluginabi.MethodHostHTTPDo, rpcHostHTTPRequest{
 		HostCallbackID: request.HostCallbackID,
 		Method:         request.Method,
