@@ -102,7 +102,10 @@ func startLogin(raw []byte) ([]byte, error) {
 		}
 		return startDeviceLogin(request.HostCallbackID, loginMethodIDC, startURL, region)
 	default:
-		return errorEnvelope("invalid_request", fmt.Sprintf("unsupported Kiro login method %q; use builder-id or idc", method), http.StatusBadRequest, false), nil
+		if option, ok := socialLoginOption(method); ok {
+			return startSocialLogin(option)
+		}
+		return errorEnvelope("invalid_request", fmt.Sprintf("unsupported Kiro login method %q; use builder-id, idc, github, google, or social", method), http.StatusBadRequest, false), nil
 	}
 }
 
@@ -176,6 +179,9 @@ func pollLogin(raw []byte) ([]byte, error) {
 	var request rpcAuthLoginPollRequest
 	if errUnmarshal := json.Unmarshal(raw, &request); errUnmarshal != nil {
 		return nil, fmt.Errorf("decode login poll request: %w", errUnmarshal)
+	}
+	if response, handled, errSocial := pollSocialLogin(request); handled {
+		return response, errSocial
 	}
 	now := loginNow()
 	loginMu.Lock()
@@ -286,6 +292,11 @@ func pruneExpiredLoginsLocked(now time.Time) {
 	for state, pending := range deviceLogins {
 		if now.After(pending.expiresAt) {
 			delete(deviceLogins, state)
+		}
+	}
+	for state, pending := range socialLogins {
+		if now.After(pending.expiresAt) {
+			delete(socialLogins, state)
 		}
 	}
 }
