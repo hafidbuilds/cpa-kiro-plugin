@@ -42,10 +42,10 @@ func callSocialPoll(t *testing.T, state, authDir string) pluginapi.AuthLoginPoll
 
 // socialTokenServer answers the Kiro auth-service code exchange.
 func socialTokenServer(t *testing.T, tokenBody string, profileStatus int) (*[]rpcHostHTTPRequest, func(string, any) (json.RawMessage, error)) {
-	var requests []rpcHostHTTPRequest
-	return &requests, func(method string, payload any) (json.RawMessage, error) {
+	requests := new([]rpcHostHTTPRequest)
+	return requests, func(method string, payload any) (json.RawMessage, error) {
 		request := payload.(rpcHostHTTPRequest)
-		requests = append(requests, request)
+		*requests = append(*requests, request)
 		parsed, _ := url.Parse(request.URL)
 		switch {
 		case parsed.Host == "prod.us-east-1.auth.desktop.kiro.dev" && parsed.Path == "/oauth/token":
