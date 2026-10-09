@@ -28,11 +28,11 @@ The two keys have different purposes:
 
 ## 1. Build and install the plugin
 
-For a CLIProxyAPI process running directly on the current machine:
+This repository builds against a local CLIProxyAPI checkout at `../CLIProxyAPI`
+(see the `replace` directive in `go.mod`). Build the shared library for the
+machine where CLIProxyAPI runs:
 
 ```bash
-make -C examples/plugin build-kiro
-
 plugin_os="$(go env GOOS)"
 plugin_arch="$(go env GOARCH)"
 case "$plugin_os" in
@@ -41,24 +41,25 @@ case "$plugin_os" in
   *) plugin_ext="so" ;;
 esac
 
-mkdir -p "plugins/$plugin_os/$plugin_arch"
-cp "examples/plugin/bin/kiro-go.$plugin_ext" "plugins/$plugin_os/$plugin_arch/"
+mkdir -p "../CLIProxyAPI/plugins/$plugin_os/$plugin_arch"
+CGO_ENABLED=1 go build -buildmode=c-shared \
+  -o "../CLIProxyAPI/plugins/$plugin_os/$plugin_arch/kiro-go.$plugin_ext" .
+rm -f "../CLIProxyAPI/plugins/$plugin_os/$plugin_arch/kiro-go.h"
 ```
 
 The plugin must be built for the operating system and architecture where
 CLIProxyAPI runs, not necessarily where the source directory is located.
 
 For a Podman deployment on an Apple Silicon Mac, CLIProxyAPI runs inside a
-Linux ARM64 virtual machine. Build the Linux ARM64 plugin with Podman:
+Linux ARM64 virtual machine. Mount the parent directory so the `replace`
+path still resolves, then build the Linux ARM64 plugin:
 
 ```bash
-mkdir -p plugins/linux/arm64
-
 podman run --rm \
-  -v "$PWD:/src" \
-  -w /src/examples/plugin/kiro/go \
+  -v "$PWD/..:/src" \
+  -w /src/cpa-kiro-plugin \
   docker.io/library/golang:1.26 \
-  sh -c 'CGO_ENABLED=1 go build -buildmode=c-shared -o /src/plugins/linux/arm64/kiro-go.so . && rm -f /src/plugins/linux/arm64/kiro-go.h'
+  sh -c 'mkdir -p /src/CLIProxyAPI/plugins/linux/arm64 && CGO_ENABLED=1 go build -buildmode=c-shared -o /src/CLIProxyAPI/plugins/linux/arm64/kiro-go.so . && rm -f /src/CLIProxyAPI/plugins/linux/arm64/kiro-go.h'
 ```
 
 The image name is an OCI registry reference. This command uses Podman and does

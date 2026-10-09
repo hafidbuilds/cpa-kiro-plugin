@@ -1,3 +1,11 @@
+# Origin
+
+This repository starts from the Kiro plugin in
+[router-for-me/CLIProxyAPI#4816](https://github.com/router-for-me/CLIProxyAPI/pull/4816)
+by wangyedev (ianwangye), extracted from `examples/plugin/kiro` with its commit
+history preserved. CLIProxyAPI, including that example code, is MIT licensed:
+https://github.com/router-for-me/CLIProxyAPI/blob/main/LICENSE
+
 # Third-party notices
 
 The Kiro runtime integration was informed by the Kiro-Go project:
