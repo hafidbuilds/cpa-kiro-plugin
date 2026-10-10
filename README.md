@@ -2,7 +2,7 @@
 
 This repository contains the source code for a Kiro provider plugin. CLIProxyAPI loads the plugin as a compiled dynamic library and exposes Kiro models through its OpenAI-compatible and Anthropic-compatible endpoints.
 
-This guide uses a Kiro API key. The plugin also implements Kiro login and token refresh through CLIProxyAPI's plugin OAuth API.
+Use the built-in Kiro OAuth flow for interactive sign-in. The plugin also accepts a Kiro API key for non-interactive setups.
 
 ## Why the plugin has its own repository
 
@@ -36,7 +36,7 @@ You need:
 
 - a CLIProxyAPI checkout beside this repository;
 - Go 1.26 or later;
-- a Kiro API key and its region;
+- a Kiro account, or a Kiro API key for non-interactive setup;
 - a client key for CLIProxyAPI, such as `local-dev-key`; and
 - Claude Code or Codex CLI if you want to test a client.
 
@@ -132,7 +132,41 @@ The plugin also accepts these optional compatibility settings:
 
 These values become compatibility headers in requests to Kiro. Use the defaults unless Kiro requires different values.
 
-## Add the Kiro credential
+## Sign in to Kiro
+
+After you enable the plugin, sign in with the `cliproxyapi` command you use to start CLIProxyAPI. The default method is AWS Builder ID:
+
+```bash
+cliproxyapi --kiro-login
+```
+
+Choose another login method with `--kiro-login-method`:
+
+```bash
+cliproxyapi --kiro-login --kiro-login-method github
+cliproxyapi --kiro-login --kiro-login-method google
+```
+
+For IAM Identity Center, provide the start URL and region:
+
+```bash
+cliproxyapi --kiro-login \
+  --kiro-login-method idc \
+  --kiro-login-start-url "https://d-example.awsapps.com/start" \
+  --kiro-login-region us-east-1
+```
+
+The command opens the login page, waits for you to finish, and saves the resulting credential in CLIProxyAPI's configured auth directory. GitHub and Google login use `127.0.0.1:3128` for the browser callback, so keep that port free. If the browser does not open, copy the `Login URL` printed by the command.
+
+If CLIProxyAPI uses a non-default configuration file, add `--config`:
+
+```bash
+cliproxyapi --config /path/to/cliproxyapi.conf --kiro-login
+```
+
+The plugin must be enabled before CLIProxyAPI can register these flags. See [Configure CLIProxyAPI](#configure-cliproxyapi).
+
+## Use an API key instead
 
 Create `.env` in the directory from which CLIProxyAPI starts:
 

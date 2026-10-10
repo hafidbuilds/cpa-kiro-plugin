@@ -93,6 +93,7 @@ type registrationCapability struct {
 	ExecutorModelScope    pluginapi.ExecutorModelScope `json:"executor_model_scope"`
 	ExecutorInputFormats  []string                     `json:"executor_input_formats"`
 	ExecutorOutputFormats []string                     `json:"executor_output_formats"`
+	CommandLinePlugin     bool                         `json:"command_line_plugin"`
 }
 
 type pluginConfig struct {
@@ -197,6 +198,10 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 		return pollLogin(request)
 	case pluginabi.MethodAuthRefresh:
 		return refreshAuth(request)
+	case pluginabi.MethodCommandLineRegister:
+		return registerKiroCommandLine(request)
+	case pluginabi.MethodCommandLineExecute:
+		return executeKiroCommandLine(request)
 	case pluginabi.MethodExecutorExecute:
 		return execute(request)
 	case pluginabi.MethodExecutorExecuteStream:
@@ -277,6 +282,7 @@ func pluginRegistration() registration {
 			ExecutorModelScope:    pluginapi.ExecutorModelScopeBoth,
 			ExecutorInputFormats:  []string{"claude"},
 			ExecutorOutputFormats: []string{"claude"},
+			CommandLinePlugin:     true,
 		},
 	}
 }
