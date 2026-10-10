@@ -1,0 +1,33 @@
+{
+  "schema_version": 6,
+  "abi_version": 1,
+  "plugin_identifier": "kiro",
+  "plugin_methods": [
+    "plugin.register",
+    "plugin.reconfigure",
+    "model.register",
+    "model.static",
+    "model.for_auth",
+    "auth.identifier",
+    "auth.parse",
+    "auth.login.start",
+    "auth.login.poll",
+    "auth.refresh",
+    "executor.identifier",
+    "executor.execute",
+    "executor.execute_stream",
+    "executor.count_tokens",
+    "executor.http_request",
+    "command_line.register",
+    "command_line.execute"
+  ],
+  "host_callbacks": [
+    "host.http.do",
+    "host.http.do_stream",
+    "host.http.stream_read",
+    "host.http.stream_close",
+    "host.stream.emit",
+    "host.stream.close",
+    "host.log"
+  ]
+}

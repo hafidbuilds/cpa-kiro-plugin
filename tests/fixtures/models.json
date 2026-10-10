@@ -1,0 +1,133 @@
+{
+  "configured_model_ids": ["claude-sonnet-4.5", "claude-haiku-4.5"],
+  "model_info_fields": [
+    "ID", "Object", "Created", "OwnedBy", "Type", "DisplayName", "Name",
+    "Version", "Description", "InputTokenLimit", "OutputTokenLimit",
+    "SupportedGenerationMethods", "ContextLength", "MaxCompletionTokens",
+    "SupportedParameters", "SupportedInputModalities", "SupportedOutputModalities",
+    "Thinking", "UserDefined"
+  ],
+  "static_and_register": {
+    "methods": ["model.register", "model.static"],
+    "response": {
+      "ok": true,
+      "result": {
+        "Provider": "kiro",
+        "Models": [
+          {
+            "ID": "claude-sonnet-4.5",
+            "Name": "claude-sonnet-4.5",
+            "DisplayName": "claude-sonnet-4.5",
+            "Object": "model",
+            "OwnedBy": "kiro",
+            "Type": "claude",
+            "ContextLength": 200000,
+            "InputTokenLimit": 200000,
+            "OutputTokenLimit": 64000,
+            "MaxCompletionTokens": 64000,
+            "SupportedGenerationMethods": ["generateContent", "streamGenerateContent"],
+            "SupportedParameters": ["max_tokens", "temperature", "top_p", "tools"],
+            "SupportedInputModalities": ["text", "image"],
+            "SupportedOutputModalities": ["text"]
+          },
+          {
+            "ID": "claude-haiku-4.5",
+            "Name": "claude-haiku-4.5",
+            "DisplayName": "claude-haiku-4.5",
+            "Object": "model",
+            "OwnedBy": "kiro",
+            "Type": "claude",
+            "ContextLength": 200000,
+            "InputTokenLimit": 200000,
+            "OutputTokenLimit": 64000,
+            "MaxCompletionTokens": 64000,
+            "SupportedGenerationMethods": ["generateContent", "streamGenerateContent"],
+            "SupportedParameters": ["max_tokens", "temperature", "top_p", "tools"],
+            "SupportedInputModalities": ["text", "image"],
+            "SupportedOutputModalities": ["text"]
+          }
+        ]
+      }
+    }
+  },
+  "for_auth": {
+    "method": "model.for_auth",
+    "request": {
+      "AuthID": "kiro-pro",
+      "StorageJSON": "eyJ0eXBlIjoia2lybyIsImFwaV9rZXlfZW52IjoiS0lST19URVNUX0tFWSIsInJlZ2lvbiI6InVzLWVhc3QtMSJ9",
+      "host_callback_id": "callback-1"
+    },
+    "upstream_list_url_us_east_1": "https://codewhisperer.us-east-1.amazonaws.com/ListAvailableModels?maxResults=50&origin=AI_EDITOR",
+    "upstream_list_url_eu_central_1": "https://q.eu-central-1.amazonaws.com/ListAvailableModels?maxResults=50&origin=AI_EDITOR",
+    "upstream_query_with_profile": "profileArn",
+    "page_size": 50,
+    "max_pages": 10,
+    "cache_ttl_seconds": 300,
+    "upstream_page_1": {
+      "models": [
+        {
+          "modelId": "claude-opus-5",
+          "modelName": "Claude Opus 5",
+          "description": "Large context",
+          "supportedInputTypes": ["TEXT", "IMAGE"],
+          "tokenLimits": { "maxInputTokens": 1000000, "maxOutputTokens": 128000 }
+        },
+        { "modelId": "", "modelName": "invalid" }
+      ],
+      "nextToken": "page +/="
+    },
+    "upstream_page_2": {
+      "models": [
+        { "modelId": "claude-opus-5", "modelName": "duplicate" },
+        {
+          "modelId": "glm-5",
+          "modelName": "GLM 5",
+          "supportedInputTypes": ["TEXT"],
+          "tokenLimits": { "maxInputTokens": 200000, "maxOutputTokens": 64000 }
+        }
+      ],
+      "nextToken": null
+    },
+    "response_allow_all": {
+      "ok": true,
+      "result": {
+        "Provider": "kiro",
+        "Models": [
+          {
+            "ID": "claude-opus-5",
+            "Name": "Claude Opus 5",
+            "DisplayName": "Claude Opus 5",
+            "Object": "model",
+            "OwnedBy": "kiro",
+            "Type": "claude",
+            "Description": "Large context",
+            "ContextLength": 1000000,
+            "InputTokenLimit": 1000000,
+            "OutputTokenLimit": 128000,
+            "MaxCompletionTokens": 128000,
+            "SupportedGenerationMethods": ["generateContent", "streamGenerateContent"],
+            "SupportedParameters": ["max_tokens", "temperature", "top_p", "tools"],
+            "SupportedInputModalities": ["text", "image"],
+            "SupportedOutputModalities": ["text"]
+          },
+          {
+            "ID": "glm-5",
+            "Name": "GLM 5",
+            "DisplayName": "GLM 5",
+            "Object": "model",
+            "OwnedBy": "kiro",
+            "Type": "claude",
+            "ContextLength": 200000,
+            "InputTokenLimit": 200000,
+            "OutputTokenLimit": 64000,
+            "MaxCompletionTokens": 64000,
+            "SupportedGenerationMethods": ["generateContent", "streamGenerateContent"],
+            "SupportedParameters": ["max_tokens", "temperature", "top_p", "tools"],
+            "SupportedInputModalities": ["text"],
+            "SupportedOutputModalities": ["text"]
+          }
+        ]
+      }
+    }
+  }
+}

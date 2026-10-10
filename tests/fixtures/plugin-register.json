@@ -1,0 +1,65 @@
+{
+  "method": "plugin.register",
+  "also": "plugin.reconfigure",
+  "request": {
+    "config_yaml": "bW9kZWxzOgogIC0gJyonCg=="
+  },
+  "request_yaml": "models:\n  - '*'\n",
+  "empty_request": {},
+  "default_yaml_values": {
+    "enabled": true,
+    "models": ["claude-sonnet-4.5", "claude-haiku-4.5"],
+    "kiro_version": "0.11.107",
+    "node_version": "22.22.0",
+    "system_version": "linux#6.6.87"
+  },
+  "response": {
+    "ok": true,
+    "result": {
+      "schema_version": 6,
+      "metadata": {
+        "Name": "kiro",
+        "Version": "0.1.0",
+        "Author": "router-for-me",
+        "GitHubRepository": "https://github.com/router-for-me/CLIProxyAPI",
+        "Logo": "",
+        "ConfigFields": [
+          {
+            "Name": "models",
+            "Type": "array",
+            "EnumValues": null,
+            "Description": "Allowed Kiro model IDs. Use * to expose every model discovered for an account."
+          },
+          {
+            "Name": "kiro_version",
+            "Type": "string",
+            "EnumValues": null,
+            "Description": "Kiro client version sent in upstream compatibility headers."
+          },
+          {
+            "Name": "node_version",
+            "Type": "string",
+            "EnumValues": null,
+            "Description": "Node.js version sent in upstream compatibility headers."
+          },
+          {
+            "Name": "system_version",
+            "Type": "string",
+            "EnumValues": null,
+            "Description": "Operating-system version sent in upstream compatibility headers."
+          }
+        ]
+      },
+      "capabilities": {
+        "model_registrar": true,
+        "model_provider": true,
+        "auth_provider": true,
+        "executor": true,
+        "executor_model_scope": "both",
+        "executor_input_formats": ["claude"],
+        "executor_output_formats": ["claude"],
+        "command_line_plugin": true
+      }
+    }
+  }
+}

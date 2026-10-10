@@ -1,0 +1,157 @@
+{
+  "execute": {
+    "method": "executor.execute",
+    "request": {
+      "Model": "claude-sonnet-4.5",
+      "Payload": "eyJtb2RlbCI6ImNsYXVkZS1zb25uZXQtNC41IiwibWF4X3Rva2VucyI6MzIsIm1lc3NhZ2VzIjpbeyJyb2xlIjoidXNlciIsImNvbnRlbnQiOiJDYWxjdWxhdGUgMTcgKiAyMy4gUmV0dXJuIG9ubHkgdGhlIG51bWJlci4ifV19",
+      "StorageJSON": "eyJ0eXBlIjoia2lybyIsImFwaV9rZXlfZW52IjoiS0lST19URVNUX0tFWSIsInJlZ2lvbiI6InVzLWVhc3QtMSJ9",
+      "host_callback_id": "cb-exec",
+      "stream_id": ""
+    },
+    "request_payload_object": {
+      "model": "claude-sonnet-4.5",
+      "max_tokens": 32,
+      "messages": [
+        {
+          "role": "user",
+          "content": "Calculate 17 * 23. Return only the number."
+        }
+      ]
+    },
+    "upstream": {
+      "method": "POST",
+      "url": "https://runtime.us-east-1.kiro.dev/",
+      "host_callback": "host.http.do_stream",
+      "headers": {
+        "Accept": ["*/*"],
+        "Authorization": ["Bearer REDACTED_API_KEY"],
+        "Content-Type": ["application/x-amz-json-1.0"],
+        "Tokentype": ["API_KEY"],
+        "X-Amz-Target": ["AmazonCodeWhispererStreamingService.GenerateAssistantResponse"],
+        "X-Amzn-Codewhisperer-Optout": ["true"],
+        "Amz-Sdk-Request": ["attempt=1; max=2"]
+      },
+      "oauth_profile_arn_region_wins": {
+        "login_region": "us-east-1",
+        "profile_arn": "arn:aws:codewhisperer:eu-central-1:222222222222:profile/EUTEST",
+        "url": "https://runtime.eu-central-1.kiro.dev/"
+      },
+      "body": {
+        "conversationState": {
+          "agentContinuationId": "00000000-0000-4000-8000-000000000001",
+          "agentTaskType": "vibe",
+          "chatTriggerType": "MANUAL",
+          "conversationId": "536eec32-7f69-5b88-8fa4-efb96a1f2b0e",
+          "currentMessage": {
+            "userInputMessage": {
+              "content": "Calculate 17 * 23. Return only the number.",
+              "modelId": "claude-sonnet-4.5",
+              "origin": "KIRO_CLI"
+            }
+          }
+        },
+        "inferenceConfig": { "maxTokens": 32 }
+      }
+    },
+    "claude_to_kiro_with_tools": {
+      "claude_model_alias": "claude-sonnet-4-5",
+      "kiro_model_id": "claude-sonnet-4.5",
+      "conversationId": "a60b2e01-d252-50ad-8ec1-611d4a9f6ccb",
+      "tool_name_sanitized": "math_add_unsafe",
+      "tool_name_original": "math.add/unsafe",
+      "history_includes_system_pair": true,
+      "system_assistant_ack": "I will follow these instructions.",
+      "tool_result_status": "success",
+      "body_fields": {
+        "tools": "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools[].toolSpecification",
+        "tool_schema": "inputSchema.json",
+        "tool_results": "userInputMessageContext.toolResults[] {toolUseId,content[].text,status}"
+      }
+    },
+    "response": {
+      "ok": true,
+      "result": {
+        "Payload_object": {
+          "id": "msg_TESTMESSAGEID",
+          "type": "message",
+          "role": "assistant",
+          "content": [{ "type": "text", "text": "391" }],
+          "model": "claude-sonnet-4.5",
+          "stop_reason": "end_turn",
+          "stop_sequence": null,
+          "usage": { "input_tokens": 12, "output_tokens": 1 }
+        },
+        "Headers": { "Content-Type": ["application/json"] },
+        "Metadata": { "kiro_credits": 0 }
+      }
+    }
+  },
+  "execute_stream": {
+    "method": "executor.execute_stream",
+    "request": {
+      "Model": "claude-sonnet-4.5",
+      "Stream": true,
+      "Payload_object": {
+        "model": "claude-sonnet-4.5",
+        "max_tokens": 32,
+        "messages": [{ "role": "user", "content": "hello" }],
+        "stream": true
+      },
+      "stream_id": "plugin-stream-1"
+    },
+    "ack": {
+      "ok": true,
+      "result": {
+        "headers": { "Content-Type": ["text/event-stream"] }
+      }
+    },
+    "host_stream_emit": {
+      "method": "host.stream.emit",
+      "request_fields": ["stream_id", "payload", "error"]
+    },
+    "anthropic_sse_events": [
+      "message_start",
+      "content_block_start",
+      "content_block_delta",
+      "content_block_stop",
+      "message_delta",
+      "message_stop"
+    ],
+    "representative_deltas": [
+      { "type": "content_block_delta", "delta": { "type": "text_delta", "text": "hello" } },
+      { "type": "content_block_delta", "delta": { "type": "text_delta", "text": " world" } }
+    ]
+  },
+  "count_tokens": {
+    "method": "executor.count_tokens",
+    "estimate": "utf8 rune count of remarshaled Claude JSON, ceil-div 4",
+    "response": {
+      "ok": true,
+      "result": {
+        "Payload_object": { "input_tokens": 33 },
+        "Headers": { "Content-Type": ["application/json"] },
+        "Metadata": { "estimated": true }
+      }
+    }
+  },
+  "command_line": {
+    "register": {
+      "method": "command_line.register",
+      "response": {
+        "ok": true,
+        "result": {
+          "Flags": [
+            { "Name": "kiro-login", "Usage": "Login to Kiro in a browser", "Type": "bool" }
+          ]
+        }
+      }
+    },
+    "execute_unhandled": {
+      "method": "command_line.execute",
+      "response": {
+        "ok": true,
+        "result": { "Stdout": "", "Stderr": "", "ExitCode": 0 }
+      }
+    }
+  }
+}

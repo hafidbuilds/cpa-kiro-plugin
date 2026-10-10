@@ -1,8 +1,22 @@
 #!/bin/sh
 set -eu
 
-plugin_os="$(go env GOOS)"
-plugin_arch="$(go env GOARCH)"
+rust_target="$(rustc -vV | awk '/^host: / {print $2}')"
+rust_arch="${rust_target%%-*}"
+case "$rust_target" in
+  *-apple-darwin) plugin_os="darwin" ;;
+  *-pc-windows-*) plugin_os="windows" ;;
+  *-linux-*) plugin_os="linux" ;;
+  *) printf 'Unsupported Rust host target: %s\n' "$rust_target" >&2; exit 1 ;;
+esac
+
+case "$rust_arch" in
+  x86_64) plugin_arch="amd64" ;;
+  aarch64) plugin_arch="arm64" ;;
+  i686|i586) plugin_arch="386" ;;
+  armv7|arm) plugin_arch="arm" ;;
+  *) printf 'Unsupported Rust target architecture: %s\n' "$rust_arch" >&2; exit 1 ;;
+esac
 
 case "$plugin_os" in
   darwin) plugin_ext="dylib" ;;
@@ -15,6 +29,18 @@ output_dir="$plugin_dir/$plugin_os/$plugin_arch"
 output="$output_dir/kiro-go.$plugin_ext"
 
 mkdir -p "$output_dir"
-CGO_ENABLED=1 go build -buildmode=c-shared -o "$output" .
-rm -f "$output_dir/kiro-go.h"
+cargo build --release
+
+case "$plugin_os" in
+  darwin) library="target/release/libkiro_go.dylib" ;;
+  windows) library="target/release/kiro_go.dll" ;;
+  *) library="target/release/libkiro_go.so" ;;
+esac
+
+if [ ! -f "$library" ]; then
+  printf 'Rust plugin artifact not found: %s\n' "$library" >&2
+  exit 1
+fi
+
+cp "$library" "$output"
 printf 'Built %s\n' "$output"
