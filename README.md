@@ -1,15 +1,14 @@
 # Kiro provider plugin for CLIProxyAPI
 
-This repository builds the native Rust Kiro provider plugin for
+This repository builds a native Rust plugin for
 [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI). The plugin adds Kiro
-models and Kiro OAuth login to CLIProxyAPI without starting a second runtime or
-requiring a CLIProxyAPI source checkout.
+models and Kiro login without a Go runtime or a CLIProxyAPI source checkout.
 
-The native Rust implementation is the production implementation. Compatibility fixtures and the rewrite plan preserve the former Go behavior as historical reference material; the removed Go sources are no longer required to build or run the plugin.
+The plugin ID is `kiro-go`. The provider ID is `kiro`.
 
-## Build
+## Build the plugin
 
-Install Rust through [rustup](https://rustup.rs/), then run:
+Install Rust with [rustup](https://rustup.rs/), then run:
 
 ```bash
 git clone https://github.com/hafidbuilds/cpa-kiro-plugin.git
@@ -17,25 +16,21 @@ cd cpa-kiro-plugin
 ./build.sh
 ```
 
-The default output is:
+The build writes the plugin to:
 
 ```text
 plugins/<goos>/<goarch>/kiro-go.<extension>
 ```
 
-To build directly into the directory used by CLIProxyAPI, set `CPA_PLUGIN_DIR`:
+Set `CPA_PLUGIN_DIR` to write directly to the directory that CLIProxyAPI uses:
 
 ```bash
 CPA_PLUGIN_DIR=/path/to/plugins ./build.sh
 ```
 
-Build on the same operating system and architecture that runs CLIProxyAPI. macOS builds are verified locally. Linux cross-build and CPA load verification are intentionally deferred to a Linux CI or host; run the Linux target build and CPA smoke before publishing a Linux artifact.
-
-## Deferred TODOs
-
-- TODO: build and validate the Linux plugin artifact on a Linux host.
-- TODO: load the Linux artifact with CPA and run the Linux integration smoke test.
-- TODO: add cancellation-driven upstream stream cleanup when CPA exposes a cancellation signal in its plugin ABI.
+Build on the same operating system and architecture that runs CLIProxyAPI. The
+macOS artifact and macOS CPA load have been verified. A Linux artifact has been
+cross-built with MacPorts Zig, but Linux CPA load has not been verified.
 
 ## Enable the plugin
 
@@ -52,9 +47,7 @@ plugins:
         - "*"
 ```
 
-The plugin ID is `kiro-go`. The provider ID remains `kiro`.
-
-Use exact model IDs instead of `"*"` when you do not want model discovery:
+Use exact model IDs instead of `"*"` to disable account model discovery:
 
 ```yaml
       models:
@@ -72,45 +65,49 @@ Run:
 cliproxyapi --config /path/to/config.yaml --kiro-login
 ```
 
-The command opens Kiro's browser login page, waits for the callback on
-`127.0.0.1:3128`, and saves the credential in CLIProxyAPI's configured auth
-directory. Kiro's page handles the available login methods. Keep port `3128`
-free.
+The command opens Kiro's login page and waits for the callback on
+`127.0.0.1:3128`. Kiro's page provides the available login methods. Keep port
+`3128` free.
 
-The CLIProxyAPI client key and the Kiro credential are separate:
+CLIProxyAPI uses two separate credentials:
 
 - `access.api-keys` authenticates clients such as Claude Code and Codex CLI.
-- The Kiro OAuth credential authenticates requests sent to Kiro.
+- The Kiro credential authenticates requests sent to Kiro.
 
 ## Use Kiro models
 
-Check the model list:
+Query the model list:
 
 ```bash
 curl -fsS http://127.0.0.1:8317/v1/models \
   -H "Authorization: Bearer $CLIPROXY_API_KEY"
 ```
 
-Use a returned model ID in Claude Code, Codex CLI, or another CLIProxyAPI
-client.
+Send requests with a model ID from the response.
 
-## Manual end-to-end smoke
+## Run an end-to-end smoke test
 
-The following checks require an installed CLIProxyAPI binary, a disposable
-CLIProxyAPI configuration, a Kiro account, and network access to Kiro. They are
-manual checks only; this repository does not include credentials, a CPA binary,
-or a fake upstream.
+Use a disposable CPA configuration, a disposable client key, and a Kiro account.
+The test needs network access to Kiro.
 
-1. Build the plugin into the directory used by the test configuration:
+1. Build the plugin into a temporary directory:
 
    ```bash
    CPA_PLUGIN_DIR=/tmp/cpa-kiro-smoke/plugins ./build.sh
    ```
 
-2. Create a test configuration that enables the plugin and points CPA at that
-   directory. Replace the client key, auth directory, and model as needed:
+2. Create `/tmp/cpa-kiro-smoke/config.yaml`:
 
    ```yaml
+   config-version: 8
+   server:
+     host: "127.0.0.1"
+     port: 8317
+   oauth:
+     auth-dir: "/tmp/cpa-kiro-smoke/auth"
+   access:
+     api-keys:
+       - "REPLACE_WITH_A_DISPOSABLE_CPA_CLIENT_KEY"
    plugins:
      enabled: true
      dir: "/tmp/cpa-kiro-smoke/plugins"
@@ -119,54 +116,65 @@ or a fake upstream.
          enabled: true
          models:
            - "*"
-   access:
-     api-keys:
-       - "REPLACE_WITH_A_DISPOSABLE_CPA_CLIENT_KEY"
    ```
 
-   The auth directory is selected by the CPA configuration. Keep it disposable
-   and record its path as `CPA_AUTH_DIR`; do not paste credential contents into
-   logs or bug reports.
-
-3. Start CPA with the test configuration, then sign in in a separate terminal:
+3. Start CPA:
 
    ```bash
    cliproxyapi --config /tmp/cpa-kiro-smoke/config.yaml
+   ```
+
+4. In another terminal, start login:
+
+   ```bash
    cliproxyapi --config /tmp/cpa-kiro-smoke/config.yaml --kiro-login
    ```
 
-   Keep `127.0.0.1:3128` available. Complete the browser flow and verify that
-   CPA writes a Kiro credential under `CPA_AUTH_DIR` using the host's normal
-   auth-file naming and permissions. The login and persistence checks cannot be
-   completed without browser interaction and a real Kiro account.
+   Complete the browser flow. Confirm that CPA writes a credential under
+   `/tmp/cpa-kiro-smoke/auth`.
 
-4. Use the client API key to query models and send requests through CPA:
+5. Set the client key and query models:
 
    ```bash
    export CPA_URL=http://127.0.0.1:8317
-   export CPA_CLIENT_API_KEY=REPLACE_WITH_THE_DISPOSABLE_CPA_CLIENT_KEY
+   export CPA_CLIENT_API_KEY=REPLACE_WITH_A_DISPOSABLE_CPA_CLIENT_KEY
    curl -fsS "$CPA_URL/v1/models" \
      -H "Authorization: Bearer $CPA_CLIENT_API_KEY"
+   ```
 
+6. Send a non-streaming request:
+
+   ```bash
    curl -fsS "$CPA_URL/v1/messages" \
      -H "Authorization: Bearer $CPA_CLIENT_API_KEY" \
      -H "Content-Type: application/json" \
      -H "anthropic-version: 2023-06-01" \
      -d '{"model":"REPLACE_WITH_A_LISTED_KIRO_MODEL","max_tokens":32,"messages":[{"role":"user","content":"Reply with one word: hello"}]}'
+   ```
 
+7. Send a streaming request:
+
+   ```bash
    curl -fsS -N "$CPA_URL/v1/messages" \
      -H "Authorization: Bearer $CPA_CLIENT_API_KEY" \
      -H "Content-Type: application/json" \
      -H "anthropic-version: 2023-06-01" \
      -d '{"model":"REPLACE_WITH_A_LISTED_KIRO_MODEL","max_tokens":32,"stream":true,"messages":[{"role":"user","content":"Reply with one word: hello"}]}'
+   ```
+
+8. Send a tool request:
+
+   ```bash
    curl -fsS "$CPA_URL/v1/messages" \
      -H "Authorization: Bearer $CPA_CLIENT_API_KEY" \
      -H "Content-Type: application/json" \
      -H "anthropic-version: 2023-06-01" \
-     -d '{"model":"REPLACE_WITH_A_LISTED_KIRO_MODEL","max_tokens":64,"tools":[{"name":"lookup","description":"Look up a value","input_schema":{"type":"object","properties":{"q":{"type":"string"}},"required":["q"]}}],"tool_choice":{"type":"auto"},"messages":[{"role":"user","content":"Use the lookup tool for q=hello."}]}'
+     -d '{"model":"REPLACE_WITH_A_LISTED_KIRO_MODEL","max_tokens":64,"tools":[{"name":"lookup","description":"Look up a value","input_schema":{"type":"object","properties":{"q":{"type":"string"}},"required":["q"]}}],"tool_choice":{"type":"auto"},"messages":[{"role":"user","content":"Use the lookup tool for q=hello. Do not answer with normal text."}]}'
+   ```
 
-   # Set IMAGE_BASE64 to bytes from a local image only when the selected model
-   # and account support image input.
+9. Send an image request only if the selected model and account support images:
+
+   ```bash
    export IMAGE_BASE64=REPLACE_WITH_BASE64_IMAGE_BYTES
    curl -fsS "$CPA_URL/v1/messages" \
      -H "Authorization: Bearer $CPA_CLIENT_API_KEY" \
@@ -175,14 +183,12 @@ or a fake upstream.
      -d "{\"model\":\"REPLACE_WITH_A_LISTED_KIRO_MODEL\",\"max_tokens\":32,\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"image\",\"source\":{\"type\":\"base64\",\"media_type\":\"image/png\",\"data\":\"$IMAGE_BASE64\"}},{\"type\":\"text\",\"text\":\"Describe this image briefly.\"}]}]}"
    ```
 
-   The tool and image commands are examples of request shapes, not proof that
-   the selected model accepts those capabilities.
+10. Use disposable credentials to test expired-token refresh, invalid-token
+    handling, quota errors, and normal CPA shutdown. Do not expose credential
+    contents in logs or bug reports.
 
-5. Exercise credential and shutdown behavior only with disposable credentials
-   and an approved test account. An expired access token with a valid refresh
-   token is required for the refresh check. An intentionally invalid token is
-   required for the invalid-token status check. A real account or provider
-   test fixture that returns a quota condition is required for the quota/status
-   check. Stop the foreground CPA process with its normal shutdown mechanism
-   and verify a clean process exit with no plugin crash; do not claim these
-   checks from unit or compatibility tests alone.
+## Deferred work
+
+- TODO: load the Linux plugin artifact with a Linux CPA runtime.
+- TODO: add cancellation-driven upstream stream cleanup when CPA exposes a
+  cancellation signal in its plugin ABI.
