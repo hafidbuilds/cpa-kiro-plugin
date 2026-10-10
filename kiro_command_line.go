@@ -17,21 +17,13 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 )
 
-const (
-	kiroLoginFlag       = "kiro-login"
-	kiroLoginMethodFlag = "kiro-login-method"
-	kiroLoginStartURL   = "kiro-login-start-url"
-	kiroLoginRegion     = "kiro-login-region"
-)
+const kiroLoginFlag = "kiro-login"
 
 var openKiroLoginURL = openKiroBrowser
 
 func registerKiroCommandLine(_ []byte) ([]byte, error) {
 	return okEnvelope(pluginapi.CommandLineRegistrationResponse{Flags: []pluginapi.CommandLineFlag{
-		{Name: kiroLoginFlag, Usage: "Login to Kiro using OAuth", Type: "bool"},
-		{Name: kiroLoginMethodFlag, Usage: "Kiro login method: builder-id, idc, github, google, or social", Type: "string", DefaultValue: loginMethodBuilderID},
-		{Name: kiroLoginStartURL, Usage: "IAM Identity Center start URL", Type: "string"},
-		{Name: kiroLoginRegion, Usage: "IAM Identity Center region", Type: "string", DefaultValue: "us-east-1"},
+		{Name: kiroLoginFlag, Usage: "Login to Kiro in a browser", Type: "bool"},
 	}})
 }
 
@@ -44,36 +36,11 @@ func executeKiroCommandLine(raw []byte) ([]byte, error) {
 		return okEnvelope(pluginapi.CommandLineExecutionResponse{})
 	}
 
-	method, errMethod := normalizeKiroLoginMethod(commandLineFlag(request, kiroLoginMethodFlag))
-	if errMethod != nil {
-		return okEnvelope(pluginapi.CommandLineExecutionResponse{
-			Stderr:   []byte(errMethod.Error() + "\n"),
-			ExitCode: 2,
-		})
-	}
-
-	startURL := strings.TrimSpace(commandLineFlag(request, kiroLoginStartURL))
-	region := strings.TrimSpace(commandLineFlag(request, kiroLoginRegion))
-	if region == "" {
-		region = "us-east-1"
-	}
-	if method == loginMethodIDC && startURL == "" {
-		return okEnvelope(pluginapi.CommandLineExecutionResponse{
-			Stderr:   []byte("Kiro IAM Identity Center login requires --kiro-login-start-url\n"),
-			ExitCode: 2,
-		})
-	}
-
-	metadata := map[string]any{"method": method}
-	if method == loginMethodIDC {
-		metadata["start_url"] = startURL
-		metadata["region"] = region
-	}
 	startRequest, errMarshal := json.Marshal(rpcAuthLoginStartRequest{
 		AuthLoginStartRequest: pluginapi.AuthLoginStartRequest{
 			Provider: pluginIdentifier,
 			Host:     request.Host,
-			Metadata: metadata,
+			Metadata: map[string]any{"method": loginMethodSocial},
 		},
 	})
 	if errMarshal != nil {
@@ -88,17 +55,14 @@ func executeKiroCommandLine(raw []byte) ([]byte, error) {
 		return commandLineErrorResponse(errDecodeStart)
 	}
 
-	var callbackCleanup func()
-	if method == loginMethodGoogle || method == loginMethodGitHub || method == loginMethodSocial {
-		callbackCleanup, errStart = startKiroSocialCallback(request.Host.AuthDir, start.State)
-		if errStart != nil {
-			return commandLineErrorResponse(errStart)
-		}
-		defer callbackCleanup()
+	callbackCleanup, errStart := startKiroSocialCallback(request.Host.AuthDir, start.State)
+	if errStart != nil {
+		return commandLineErrorResponse(errStart)
 	}
+	defer callbackCleanup()
 
 	var output bytes.Buffer
-	fmt.Fprintf(&output, "Kiro %s login started.\n", method)
+	fmt.Fprintln(&output, "Kiro login started.")
 	fmt.Fprintf(&output, "Login URL: %s\n", start.URL)
 	if errOpen := openKiroLoginURL(start.URL); errOpen != nil {
 		fmt.Fprintf(&output, "Open the URL above in a browser: %v\n", errOpen)
@@ -149,33 +113,6 @@ func executeKiroCommandLine(raw []byte) ([]byte, error) {
 		Stderr:   []byte("Kiro login timed out. Start the command again.\n"),
 		ExitCode: 1,
 	})
-}
-
-func normalizeKiroLoginMethod(raw string) (string, error) {
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "", "builder", "builder-id", "builderid":
-		return loginMethodBuilderID, nil
-	case loginMethodIDC:
-		return loginMethodIDC, nil
-	case loginMethodGitHub:
-		return loginMethodGitHub, nil
-	case loginMethodGoogle:
-		return loginMethodGoogle, nil
-	case loginMethodSocial:
-		return loginMethodSocial, nil
-	default:
-		return "", fmt.Errorf("unsupported Kiro login method %q; use builder-id, idc, github, google, or social", raw)
-	}
-}
-
-func commandLineFlag(request pluginapi.CommandLineExecutionRequest, name string) string {
-	if value, ok := request.TriggeredFlags[name]; ok && value.Set {
-		return value.Value
-	}
-	if value, ok := request.Flags[name]; ok {
-		return value.Value
-	}
-	return ""
 }
 
 func commandLineFlagSet(request pluginapi.CommandLineExecutionRequest, name string) bool {

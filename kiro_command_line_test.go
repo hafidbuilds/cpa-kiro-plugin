@@ -7,7 +7,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 )
 
-func TestRegisterKiroCommandLineDeclaresLoginFlags(t *testing.T) {
+func TestRegisterKiroCommandLineDeclaresOnlyLoginFlag(t *testing.T) {
 	raw, errRegister := registerKiroCommandLine(nil)
 	if errRegister != nil {
 		t.Fatal(errRegister)
@@ -16,53 +16,16 @@ func TestRegisterKiroCommandLineDeclaresLoginFlags(t *testing.T) {
 	if errDecode := decodeKiroCommandLineResult(raw, &response); errDecode != nil {
 		t.Fatal(errDecode)
 	}
-
-	got := make(map[string]pluginapi.CommandLineFlag, len(response.Flags))
-	for _, flag := range response.Flags {
-		got[flag.Name] = flag
+	if len(response.Flags) != 1 {
+		t.Fatalf("registered flags = %d, want 1", len(response.Flags))
 	}
-	for _, name := range []string{kiroLoginFlag, kiroLoginMethodFlag, kiroLoginStartURL, kiroLoginRegion} {
-		if _, ok := got[name]; !ok {
-			t.Errorf("missing Kiro login flag %q", name)
-		}
-	}
-	if got[kiroLoginMethodFlag].DefaultValue != loginMethodBuilderID {
-		t.Fatalf("login method default = %q, want %q", got[kiroLoginMethodFlag].DefaultValue, loginMethodBuilderID)
+	if response.Flags[0].Name != kiroLoginFlag || response.Flags[0].Type != "bool" {
+		t.Fatalf("registered flag = %#v, want %q bool flag", response.Flags[0], kiroLoginFlag)
 	}
 }
 
-func TestNormalizeKiroLoginMethod(t *testing.T) {
-	tests := map[string]string{
-		"":          loginMethodBuilderID,
-		"builder":   loginMethodBuilderID,
-		"builderid": loginMethodBuilderID,
-		"idc":       loginMethodIDC,
-		"github":    loginMethodGitHub,
-		"google":    loginMethodGoogle,
-		"social":    loginMethodSocial,
-	}
-	for raw, want := range tests {
-		got, errNormalize := normalizeKiroLoginMethod(raw)
-		if errNormalize != nil {
-			t.Errorf("normalizeKiroLoginMethod(%q) error = %v", raw, errNormalize)
-			continue
-		}
-		if got != want {
-			t.Errorf("normalizeKiroLoginMethod(%q) = %q, want %q", raw, got, want)
-		}
-	}
-	if _, errNormalize := normalizeKiroLoginMethod("password"); errNormalize == nil {
-		t.Fatal("normalizeKiroLoginMethod(password) error = nil")
-	}
-}
-
-func TestExecuteKiroCommandLineRequiresIDCStartURL(t *testing.T) {
-	rawRequest, errMarshal := json.Marshal(pluginapi.CommandLineExecutionRequest{
-		TriggeredFlags: map[string]pluginapi.CommandLineFlagValue{
-			kiroLoginFlag:       {Name: kiroLoginFlag, Type: "bool", Value: "true", Set: true},
-			kiroLoginMethodFlag: {Name: kiroLoginMethodFlag, Type: "string", Value: loginMethodIDC, Set: true},
-		},
-	})
+func TestExecuteKiroCommandLineWithoutLoginFlagIsNoOp(t *testing.T) {
+	rawRequest, errMarshal := json.Marshal(pluginapi.CommandLineExecutionRequest{})
 	if errMarshal != nil {
 		t.Fatal(errMarshal)
 	}
@@ -74,8 +37,8 @@ func TestExecuteKiroCommandLineRequiresIDCStartURL(t *testing.T) {
 	if errDecode := decodeKiroCommandLineResult(rawResponse, &response); errDecode != nil {
 		t.Fatal(errDecode)
 	}
-	if response.ExitCode != 2 || string(response.Stderr) == "" {
-		t.Fatalf("response = %#v, want validation error", response)
+	if response.ExitCode != 0 || len(response.Stdout) != 0 || len(response.Stderr) != 0 {
+		t.Fatalf("response = %#v, want an empty success response", response)
 	}
 }
 

@@ -134,29 +134,13 @@ These values become compatibility headers in requests to Kiro. Use the defaults 
 
 ## Sign in to Kiro
 
-After you enable the plugin, sign in with the `cliproxyapi` command you use to start CLIProxyAPI. The default method is AWS Builder ID:
+After you enable the plugin, run:
 
 ```bash
 cliproxyapi --kiro-login
 ```
 
-Choose another login method with `--kiro-login-method`:
-
-```bash
-cliproxyapi --kiro-login --kiro-login-method github
-cliproxyapi --kiro-login --kiro-login-method google
-```
-
-For IAM Identity Center, provide the start URL and region:
-
-```bash
-cliproxyapi --kiro-login \
-  --kiro-login-method idc \
-  --kiro-login-start-url "https://d-example.awsapps.com/start" \
-  --kiro-login-region us-east-1
-```
-
-The command opens the login page, waits for you to finish, and saves the resulting credential in CLIProxyAPI's configured auth directory. GitHub and Google login use `127.0.0.1:3128` for the browser callback, so keep that port free. If the browser does not open, copy the `Login URL` printed by the command.
+The command opens Kiro's browser login page, waits for sign-in, and saves the resulting credential in CLIProxyAPI's configured auth directory. Kiro's page handles the available login methods. The browser callback uses `127.0.0.1:3128`, so keep that port free. If the browser does not open, copy the `Login URL` printed by the command.
 
 If CLIProxyAPI uses a non-default configuration file, add `--config`:
 
@@ -164,7 +148,7 @@ If CLIProxyAPI uses a non-default configuration file, add `--config`:
 cliproxyapi --config /path/to/cliproxyapi.conf --kiro-login
 ```
 
-The plugin must be enabled before CLIProxyAPI can register these flags. See [Configure CLIProxyAPI](#configure-cliproxyapi).
+The plugin must be enabled before CLIProxyAPI can register `--kiro-login`. See [Configure CLIProxyAPI](#configure-cliproxyapi).
 
 ## Use an API key instead
 
