@@ -14,6 +14,8 @@ pub mod kiro_credentials;
 pub mod kiro_event_stream;
 #[path = "kiro-executor.rs"]
 pub mod kiro_executor;
+#[path = "kiro-login.rs"]
+mod kiro_login;
 #[path = "kiro-models.rs"]
 pub mod kiro_models;
 #[path = "kiro-request-transform.rs"]
