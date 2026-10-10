@@ -64,7 +64,7 @@ type upstreamRequest struct {
 	Body    []byte
 }
 
-func execute(raw []byte) ([]byte, error) {
+func executeKiroRequest(raw []byte) ([]byte, error) {
 	var request rpcExecutorRequest
 	if errUnmarshal := json.Unmarshal(raw, &request); errUnmarshal != nil {
 		return nil, fmt.Errorf("decode executor request: %w", errUnmarshal)
@@ -76,7 +76,7 @@ func execute(raw []byte) ([]byte, error) {
 
 	var lastErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		accumulator := newAccumulator(payload)
+		accumulator := newClaudeResponseAccumulator(payload)
 		emitted, status, errRun := consumeUpstream(request.HostCallbackID, upstream, attempt, func(events []kiroEvent) error {
 			for _, event := range events {
 				if _, errAccept := accumulator.accept(event); errAccept != nil {
@@ -109,7 +109,7 @@ func execute(raw []byte) ([]byte, error) {
 	return upstreamErrorEnvelope(0, lastErr), nil
 }
 
-func executeStream(raw []byte) ([]byte, error) {
+func executeKiroStreamingRequest(raw []byte) ([]byte, error) {
 	var request rpcExecutorRequest
 	if errUnmarshal := json.Unmarshal(raw, &request); errUnmarshal != nil {
 		return nil, fmt.Errorf("decode streaming executor request: %w", errUnmarshal)
@@ -160,7 +160,7 @@ func runStream(request rpcExecutorRequest, upstream upstreamRequest, payload *ki
 	}()
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		accumulator := newAccumulator(payload)
+		accumulator := newClaudeResponseAccumulator(payload)
 		writer := newClaudeSSEWriter(accumulator)
 		clientEmitted := false
 		onEvents := func(events []kiroEvent) error {
@@ -303,7 +303,7 @@ type openedUpstream struct {
 func openUpstream(hostCallbackID string, request upstreamRequest, attempt int) (openedUpstream, int, error) {
 	headers := request.Headers.Clone()
 	headers.Set("Amz-Sdk-Request", fmt.Sprintf("attempt=%d; max=%d", attempt, maxAttempts))
-	headers.Set("Amz-Sdk-Invocation-Id", randomUUID())
+	headers.Set("Amz-Sdk-Invocation-Id", generateKiroUUID())
 	rawResponse, errCall := invokeHost(pluginabi.MethodHostHTTPDoStream, rpcHostHTTPRequest{
 		HostCallbackID: hostCallbackID,
 		Method:         http.MethodPost,

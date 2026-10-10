@@ -145,6 +145,8 @@ var currentConfig atomic.Value
 
 func main() {}
 
+// cliproxy_plugin_init registers the host callback table and plugin ABI entrypoints.
+//
 //export cliproxy_plugin_init
 func cliproxy_plugin_init(host *C.cliproxy_host_api, plugin *C.cliproxy_plugin_api) C.int {
 	if plugin == nil {
@@ -158,6 +160,8 @@ func cliproxy_plugin_init(host *C.cliproxy_host_api, plugin *C.cliproxy_plugin_a
 	return 0
 }
 
+// cliproxyPluginCall dispatches one CLIProxyAPI plugin method and writes an owned response buffer.
+//
 //export cliproxyPluginCall
 func cliproxyPluginCall(method *C.char, request *C.uint8_t, requestLen C.size_t, response *C.cliproxy_buffer) C.int {
 	if response != nil {
@@ -181,6 +185,8 @@ func cliproxyPluginCall(method *C.char, request *C.uint8_t, requestLen C.size_t,
 	return 0
 }
 
+// cliproxyPluginFree releases a response buffer allocated by the plugin.
+//
 //export cliproxyPluginFree
 func cliproxyPluginFree(ptr unsafe.Pointer, _ C.size_t) {
 	if ptr != nil {
@@ -188,6 +194,8 @@ func cliproxyPluginFree(ptr unsafe.Pointer, _ C.size_t) {
 	}
 }
 
+// cliproxyPluginShutdown releases plugin resources before the shared library unloads.
+//
 //export cliproxyPluginShutdown
 func cliproxyPluginShutdown() {}
 
@@ -203,25 +211,25 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 	case pluginabi.MethodModelStatic:
 		return okEnvelope(pluginapi.ModelResponse{Provider: pluginIdentifier, Models: configuredModels()})
 	case pluginabi.MethodModelForAuth:
-		return modelsForAuth(request)
+		return discoverKiroModelsForAuth(request)
 	case pluginabi.MethodAuthIdentifier, pluginabi.MethodExecutorIdentifier:
 		return okEnvelope(map[string]string{"identifier": pluginIdentifier})
 	case pluginabi.MethodAuthParse:
-		return parseAuth(request)
+		return parseKiroAuth(request)
 	case pluginabi.MethodAuthLoginStart:
 		return startLogin(request)
 	case pluginabi.MethodAuthLoginPoll:
 		return pollLogin(request)
 	case pluginabi.MethodAuthRefresh:
-		return refreshAuth(request)
+		return refreshKiroAuth(request)
 	case pluginabi.MethodCommandLineRegister:
 		return registerKiroCommandLine(request)
 	case pluginabi.MethodCommandLineExecute:
 		return executeKiroCommandLine(request)
 	case pluginabi.MethodExecutorExecute:
-		return execute(request)
+		return executeKiroRequest(request)
 	case pluginabi.MethodExecutorExecuteStream:
-		return executeStream(request)
+		return executeKiroStreamingRequest(request)
 	case pluginabi.MethodExecutorCountTokens:
 		return countTokens(request)
 	case pluginabi.MethodExecutorHTTPRequest:
@@ -368,6 +376,14 @@ func errorEnvelope(code, message string, status int, retryable bool) []byte {
 	return raw
 }
 
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return ""
+}
 func writeResponse(response *C.cliproxy_buffer, raw []byte) {
 	if response == nil || len(raw) == 0 {
 		return
@@ -378,15 +394,6 @@ func writeResponse(response *C.cliproxy_buffer, raw []byte) {
 	}
 	response.ptr = ptr
 	response.len = C.size_t(len(raw))
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if value = strings.TrimSpace(value); value != "" {
-			return value
-		}
-	}
-	return ""
 }
 
 type hostEnvelope struct {

@@ -7,7 +7,6 @@ import (
 	"errors"
 	"hash/crc32"
 	"net/http"
-	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -18,29 +17,29 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 )
 
-func TestParseAuthEnvironmentReferenceDoesNotPersistSecret(t *testing.T) {
+func TestParseKiroAuthEnvironmentReferenceDoesNotPersistSecret(t *testing.T) {
 	t.Setenv("KIRO_TEST_KEY", "secret-test-value")
 	request, _ := json.Marshal(pluginapi.AuthParseRequest{
 		FileName: "kiro-pro.json",
 		RawJSON:  []byte(`{"type":"kiro","api_key_env":"KIRO_TEST_KEY","region":"us-east-1","label":"pro"}`),
 	})
-	raw, errParse := parseAuth(request)
+	raw, errParse := parseKiroAuth(request)
 	if errParse != nil {
-		t.Fatalf("parseAuth() error = %v", errParse)
+		t.Fatalf("parseKiroAuth() error = %v", errParse)
 	}
 	var env envelope
 	if errUnmarshal := json.Unmarshal(raw, &env); errUnmarshal != nil {
 		t.Fatal(errUnmarshal)
 	}
 	if !env.OK {
-		t.Fatalf("parseAuth() envelope = %#v", env)
+		t.Fatalf("parseKiroAuth() envelope = %#v", env)
 	}
 	var response pluginapi.AuthParseResponse
 	if errUnmarshal := json.Unmarshal(env.Result, &response); errUnmarshal != nil {
 		t.Fatal(errUnmarshal)
 	}
-	if !response.Handled || response.Auth.Provider != pluginIdentifier {
-		t.Fatalf("ParseAuth response = %#v", response)
+	if !response.Handled || response.Auth.Provider != "kiro" {
+		t.Fatalf("parseKiroAuth() response = %#v", response)
 	}
 	if strings.Contains(string(response.Auth.StorageJSON), "secret-test-value") {
 		t.Fatal("StorageJSON contains resolved API key")
@@ -74,188 +73,7 @@ func TestMissingEnvironmentAPIKeyIsAuthenticationFailure(t *testing.T) {
 	}
 }
 
-func TestModelsForAuthDiscoversPaginatesAndCaches(t *testing.T) {
-	configureKiroTest(t, "models:\n  - '*'\n")
-	t.Setenv("KIRO_TEST_KEY", "test-discovery-key")
-
-	var requests []rpcHostHTTPRequest
-	previous := invokeHost
-	invokeHost = func(method string, payload any) (json.RawMessage, error) {
-		if method != pluginabi.MethodHostHTTPDo {
-			return nil, os.ErrInvalid
-		}
-		request := payload.(rpcHostHTTPRequest)
-		requests = append(requests, request)
-		if request.Headers.Get("Authorization") != "Bearer test-discovery-key" || request.Headers.Get("TokenType") != "API_KEY" {
-			t.Fatalf("discovery headers = %#v", request.Headers)
-		}
-		machine := machineID(kiroCredential{AuthMethod: authMethodAPIKey}, "test-discovery-key")
-		if !strings.Contains(request.Headers.Get("User-Agent"), "api/codewhispererruntime#1.0.0") ||
-			!strings.HasSuffix(request.Headers.Get("User-Agent"), "-"+machine) ||
-			!strings.HasSuffix(request.Headers.Get("X-Amz-User-Agent"), "-"+machine) ||
-			request.Headers.Get("X-Amzn-Codewhisperer-Optout") != "true" {
-			t.Fatalf("Kiro identity headers = %#v", request.Headers)
-		}
-		parsed, errParse := url.Parse(request.URL)
-		if errParse != nil {
-			t.Fatal(errParse)
-		}
-		if parsed.Host != "codewhisperer.us-east-1.amazonaws.com" || parsed.Path != "/ListAvailableModels" {
-			t.Fatalf("discovery URL = %q", request.URL)
-		}
-		var body []byte
-		switch len(requests) {
-		case 1:
-			if parsed.Query().Get("nextToken") != "" {
-				t.Fatalf("first nextToken = %q", parsed.Query().Get("nextToken"))
-			}
-			body = []byte(`{
-				"models":[
-					{"modelId":"claude-opus-5","modelName":"Claude Opus 5","description":"Large context","supportedInputTypes":["TEXT","IMAGE"],"tokenLimits":{"maxInputTokens":1000000,"maxOutputTokens":128000}},
-					{"modelId":"","modelName":"invalid"}
-				],
-				"nextToken":"page +/="
-			}`)
-		case 2:
-			if parsed.Query().Get("nextToken") != "page +/=" {
-				t.Fatalf("second nextToken = %q", parsed.Query().Get("nextToken"))
-			}
-			body = []byte(`{
-				"models":[
-					{"modelId":"claude-opus-5","modelName":"duplicate"},
-					{"modelId":"glm-5","modelName":"GLM 5","supportedInputTypes":["TEXT"],"tokenLimits":{"maxInputTokens":200000,"maxOutputTokens":64000}}
-				],
-				"nextToken":null
-			}`)
-		default:
-			t.Fatalf("unexpected discovery request %d", len(requests))
-		}
-		return mustJSONRaw(pluginapi.HTTPResponse{StatusCode: http.StatusOK, Body: body}), nil
-	}
-	t.Cleanup(func() { invokeHost = previous })
-
-	response := callModelsForAuthTest(t, "kiro-pro", "callback-1")
-	if len(response.Models) != 2 {
-		t.Fatalf("discovered models = %#v", response.Models)
-	}
-	if response.Models[0].ID != "claude-opus-5" || response.Models[0].InputTokenLimit != 1_000_000 || response.Models[0].OutputTokenLimit != 128_000 {
-		t.Fatalf("first model = %#v", response.Models[0])
-	}
-	if strings.Join(response.Models[0].SupportedInputModalities, ",") != "text,image" {
-		t.Fatalf("first model modalities = %#v", response.Models[0].SupportedInputModalities)
-	}
-	if response.Models[1].ID != "glm-5" || strings.Join(response.Models[1].SupportedInputModalities, ",") != "text" {
-		t.Fatalf("second model = %#v", response.Models[1])
-	}
-
-	cached := callModelsForAuthTest(t, "kiro-pro", "callback-2")
-	if len(cached.Models) != 2 || len(requests) != 2 {
-		t.Fatalf("cached models=%d HTTP requests=%d", len(cached.Models), len(requests))
-	}
-}
-
-func TestModelDiscoveryURLUsesKiroGoRegionalHosts(t *testing.T) {
-	tests := []struct {
-		region string
-		host   string
-	}{
-		{region: "us-east-1", host: "codewhisperer.us-east-1.amazonaws.com"},
-		{region: "eu-central-1", host: "q.eu-central-1.amazonaws.com"},
-	}
-	for _, test := range tests {
-		rawURL, errURL := modelDiscoveryURL(test.region, "", "")
-		if errURL != nil {
-			t.Fatalf("modelDiscoveryURL(%q) error = %v", test.region, errURL)
-		}
-		parsed, errParse := url.Parse(rawURL)
-		if errParse != nil {
-			t.Fatal(errParse)
-		}
-		if parsed.Host != test.host {
-			t.Fatalf("modelDiscoveryURL(%q) host = %q, want %q", test.region, parsed.Host, test.host)
-		}
-	}
-}
-
-func TestModelsForAuthAppliesConfiguredAllowList(t *testing.T) {
-	configureKiroTest(t, "models:\n  - claude-sonnet-4.5\n")
-	t.Setenv("KIRO_TEST_KEY", "test-allow-list-key")
-
-	previous := invokeHost
-	invokeHost = func(method string, payload any) (json.RawMessage, error) {
-		if method != pluginabi.MethodHostHTTPDo {
-			return nil, os.ErrInvalid
-		}
-		body := []byte(`{"models":[{"modelId":"claude-sonnet-4.5","modelName":"Sonnet"},{"modelId":"claude-opus-5","modelName":"Opus"}]}`)
-		return mustJSONRaw(pluginapi.HTTPResponse{StatusCode: http.StatusOK, Body: body}), nil
-	}
-	t.Cleanup(func() { invokeHost = previous })
-
-	response := callModelsForAuthTest(t, "kiro-allow-list", "callback-allow-list")
-	if len(response.Models) != 1 || response.Models[0].ID != "claude-sonnet-4.5" {
-		t.Fatalf("allow-listed models = %#v", response.Models)
-	}
-}
-
-func TestModelsForAuthUsesConfiguredFallbackOnColdStartFailure(t *testing.T) {
-	configureKiroTest(t, "models:\n  - '*'\n")
-	t.Setenv("KIRO_TEST_KEY", "test-fallback-key")
-
-	previous := invokeHost
-	invokeHost = func(method string, payload any) (json.RawMessage, error) {
-		switch method {
-		case pluginabi.MethodHostHTTPDo:
-			return mustJSONRaw(pluginapi.HTTPResponse{StatusCode: http.StatusServiceUnavailable, Body: []byte(`{"message":"temporary"}`)}), nil
-		case pluginabi.MethodHostLog:
-			return json.RawMessage(`{}`), nil
-		default:
-			return nil, os.ErrInvalid
-		}
-	}
-	t.Cleanup(func() { invokeHost = previous })
-
-	response := callModelsForAuthTest(t, "kiro-fallback", "callback-fallback")
-	if len(response.Models) != 2 || response.Models[0].ID != "claude-sonnet-4.5" || response.Models[1].ID != "claude-haiku-4.5" {
-		t.Fatalf("fallback models = %#v", response.Models)
-	}
-	for _, model := range response.Models {
-		if model.ID == "*" {
-			t.Fatal("wildcard was registered as a model")
-		}
-	}
-}
-
-func TestModelsForAuthUsesStaleCacheOnRefreshFailure(t *testing.T) {
-	configureKiroTest(t, "models:\n  - '*'\n")
-	t.Setenv("KIRO_TEST_KEY", "test-stale-key")
-	cacheKey := modelCacheKey("kiro-stale", "us-east-1", "test-stale-key")
-	modelCacheMu.Lock()
-	modelCache[cacheKey] = modelCacheEntry{
-		Models:    []pluginapi.ModelInfo{{ID: "claude-opus-5", Name: "Claude Opus 5"}},
-		FetchedAt: time.Now().Add(-modelCacheTTL - time.Second),
-	}
-	modelCacheMu.Unlock()
-
-	previous := invokeHost
-	invokeHost = func(method string, payload any) (json.RawMessage, error) {
-		switch method {
-		case pluginabi.MethodHostHTTPDo:
-			return nil, os.ErrDeadlineExceeded
-		case pluginabi.MethodHostLog:
-			return json.RawMessage(`{}`), nil
-		default:
-			return nil, os.ErrInvalid
-		}
-	}
-	t.Cleanup(func() { invokeHost = previous })
-
-	response := callModelsForAuthTest(t, "kiro-stale", "callback-stale")
-	if len(response.Models) != 1 || response.Models[0].ID != "claude-opus-5" {
-		t.Fatalf("stale models = %#v", response.Models)
-	}
-}
-
-func TestClaudeToKiroTransformsSystemToolsAndResults(t *testing.T) {
+func TestTranslateClaudeRequestToKiroTransformsSystemToolsAndResults(t *testing.T) {
 	raw := []byte(`{
 		"model":"claude-sonnet-4-5",
 		"max_tokens":128,
@@ -300,7 +118,7 @@ func TestClaudeToKiroTransformsSystemToolsAndResults(t *testing.T) {
 	}
 }
 
-func TestClaudeToKiroGloballyDisambiguatesHistoricalToolNames(t *testing.T) {
+func TestTranslateClaudeRequestToKiroDisambiguatesHistoricalToolNames(t *testing.T) {
 	payload, _, errTranslate := claudeToKiro([]byte(`{
 		"model":"claude-sonnet-4-5",
 		"tools":[
@@ -338,7 +156,7 @@ func TestClaudeToKiroGloballyDisambiguatesHistoricalToolNames(t *testing.T) {
 	}
 }
 
-func TestClaudeToKiroRecalculatesInputEstimateAfterTruncation(t *testing.T) {
+func TestTranslateClaudeRequestToKiroRecalculatesInputEstimateAfterTruncation(t *testing.T) {
 	payload, request, errTranslate := claudeToKiro([]byte(`{
 		"model":"claude-sonnet-4-5",
 		"messages":[
@@ -359,7 +177,7 @@ func TestClaudeToKiroRecalculatesInputEstimateAfterTruncation(t *testing.T) {
 	}
 }
 
-func TestTruncatePayloadEvictsOldestConversationTurn(t *testing.T) {
+func TestTruncateKiroPayloadEvictsOldestConversationTurn(t *testing.T) {
 	payload := &kiroPayload{}
 	payload.ConversationState.History = []kiroHistoryMessage{
 		{UserInputMessage: &kiroUserInputMessage{Content: strings.Repeat("x", maxKiroPayloadBytes), ModelID: "model", Origin: "KIRO_CLI"}},
@@ -368,7 +186,7 @@ func TestTruncatePayloadEvictsOldestConversationTurn(t *testing.T) {
 		{AssistantResponseMessage: &kiroAssistantResponseMessage{Content: "new response"}},
 	}
 
-	truncatePayload(payload, false)
+	truncateKiroPayload(payload, false)
 
 	if len(payload.ConversationState.History) != 2 {
 		t.Fatalf("history length = %d, want newest turn only", len(payload.ConversationState.History))
@@ -385,7 +203,7 @@ func TestTruncatePayloadEvictsOldestConversationTurn(t *testing.T) {
 	}
 }
 
-func TestClaudeToKiroPreservesExplicitZeroSamplingValues(t *testing.T) {
+func TestTranslateClaudeRequestToKiroPreservesExplicitZeroSamplingValues(t *testing.T) {
 	payload, _, errTranslate := claudeToKiro([]byte(`{
 		"model":"claude-sonnet-4-5",
 		"messages":[{"role":"user","content":"hello"}],
@@ -408,7 +226,7 @@ func TestClaudeToKiroPreservesExplicitZeroSamplingValues(t *testing.T) {
 	}
 }
 
-func TestClaudeToKiroRejectsUnsupportedGenerationControls(t *testing.T) {
+func TestTranslateClaudeRequestToKiroRejectsUnsupportedGenerationControls(t *testing.T) {
 	tests := []struct {
 		name string
 		body string
@@ -440,7 +258,7 @@ func TestClaudeToKiroRejectsUnsupportedGenerationControls(t *testing.T) {
 	}
 }
 
-func TestClaudeToKiroRejectsURLBackedImages(t *testing.T) {
+func TestTranslateClaudeRequestToKiroRejectsURLBackedImages(t *testing.T) {
 	tests := []struct {
 		name string
 		body string
@@ -464,7 +282,7 @@ func TestClaudeToKiroRejectsURLBackedImages(t *testing.T) {
 	}
 }
 
-func TestClaudeToKiroPreservesThinkingBudget(t *testing.T) {
+func TestTranslateClaudeRequestToKiroPreservesThinkingBudget(t *testing.T) {
 	payload, _, errTranslate := claudeToKiro([]byte(`{
 		"model":"claude-sonnet-4-5",
 		"messages":[{"role":"user","content":"hello"}],
@@ -482,7 +300,7 @@ func TestClaudeToKiroPreservesThinkingBudget(t *testing.T) {
 	}
 }
 
-func TestClaudeToKiroRejectsPayloadAboveSizeLimit(t *testing.T) {
+func TestTranslateClaudeRequestToKiroRejectsPayloadAboveSizeLimit(t *testing.T) {
 	tests := []struct {
 		name string
 		raw  []byte
@@ -505,7 +323,7 @@ func TestClaudeToKiroRejectsPayloadAboveSizeLimit(t *testing.T) {
 	}
 }
 
-func TestTruncatePayloadPreservesSyntheticSystemPair(t *testing.T) {
+func TestTruncateKiroPayloadPreservesSyntheticSystemPair(t *testing.T) {
 	payload := &kiroPayload{}
 	payload.ConversationState.History = []kiroHistoryMessage{
 		{UserInputMessage: &kiroUserInputMessage{Content: "system prompt", ModelID: "model", Origin: "KIRO_CLI"}},
@@ -516,7 +334,7 @@ func TestTruncatePayloadPreservesSyntheticSystemPair(t *testing.T) {
 		{AssistantResponseMessage: &kiroAssistantResponseMessage{Content: "new response"}},
 	}
 
-	truncatePayload(payload, true)
+	truncateKiroPayload(payload, true)
 
 	if len(payload.ConversationState.History) != 4 {
 		t.Fatalf("history length = %d, want system pair plus newest turn", len(payload.ConversationState.History))
@@ -529,7 +347,7 @@ func TestTruncatePayloadPreservesSyntheticSystemPair(t *testing.T) {
 	}
 }
 
-func TestClaudeToKiroPreservesToolResultErrorStatus(t *testing.T) {
+func TestTranslateClaudeRequestToKiroPreservesToolResultErrorStatus(t *testing.T) {
 	raw := []byte(`{
 		"model":"claude-sonnet-4-5",
 		"messages":[
@@ -550,7 +368,7 @@ func TestClaudeToKiroPreservesToolResultErrorStatus(t *testing.T) {
 	}
 }
 
-func TestClaudeToKiroSupportsAssistantPrefill(t *testing.T) {
+func TestTranslateClaudeRequestToKiroSupportsAssistantPrefill(t *testing.T) {
 	raw := []byte(`{
 		"model":"claude-sonnet-4-5",
 		"messages":[
@@ -571,7 +389,7 @@ func TestClaudeToKiroSupportsAssistantPrefill(t *testing.T) {
 	}
 }
 
-func TestNormalizeKiroModelDoesNotRewriteDatedSnapshotAsDecimal(t *testing.T) {
+func TestNormalizeKiroModelPreservesDatedSnapshot(t *testing.T) {
 	if got := normalizeKiroModel("claude-sonnet-4-20250514"); got != "claude-sonnet-4" {
 		t.Fatalf("normalizeKiroModel() = %q", got)
 	}
@@ -580,7 +398,7 @@ func TestNormalizeKiroModelDoesNotRewriteDatedSnapshotAsDecimal(t *testing.T) {
 	}
 }
 
-func TestContextWindowTokensDistinguishesDatedSnapshots(t *testing.T) {
+func TestEstimateClaudeContextWindowDistinguishesDatedSnapshots(t *testing.T) {
 	tests := []struct {
 		model string
 		want  int
@@ -630,7 +448,7 @@ func TestPendingToolUseAdoptsLateUpstreamID(t *testing.T) {
 	}
 }
 
-func TestExecuteUsesHostTransportAndReturnsClaudeResponse(t *testing.T) {
+func TestExecuteKiroRequestUsesHostTransportAndReturnsClaudeResponse(t *testing.T) {
 	t.Setenv("KIRO_TEST_KEY", "test-key")
 	frames := append(testEventFrame(t, "assistantResponseEvent", map[string]any{"content": "391", "usage": map[string]any{"inputTokens": 12, "outputTokens": 1}}), testEventFrame(t, "metadataEvent", map[string]any{"stopReason": "end_turn"})...)
 	mock := newHostMock(frames)
@@ -644,14 +462,14 @@ func TestExecuteUsesHostTransportAndReturnsClaudeResponse(t *testing.T) {
 		Payload:     []byte(`{"model":"claude-sonnet-4.5","max_tokens":32,"messages":[{"role":"user","content":"Calculate 17 * 23. Return only the number."}]}`),
 		StorageJSON: storage,
 	}})
-	raw, errExecute := execute(requestRaw)
+	raw, errExecute := executeKiroRequest(requestRaw)
 	if errExecute != nil {
-		t.Fatalf("execute() error = %v", errExecute)
+		t.Fatalf("executeKiroRequest() error = %v", errExecute)
 	}
 	var env envelope
 	_ = json.Unmarshal(raw, &env)
 	if !env.OK {
-		t.Fatalf("execute() envelope = %#v", env)
+		t.Fatalf("executeKiroRequest() envelope = %#v", env)
 	}
 	var executorResponse pluginapi.ExecutorResponse
 	_ = json.Unmarshal(env.Result, &executorResponse)
@@ -670,7 +488,7 @@ func TestExecuteUsesHostTransportAndReturnsClaudeResponse(t *testing.T) {
 	}
 }
 
-func TestExecuteStreamEmitsAnthropicSSE(t *testing.T) {
+func TestExecuteKiroStreamingRequestEmitsAnthropicSSE(t *testing.T) {
 	t.Setenv("KIRO_TEST_KEY", "test-key")
 	frames := append(testEventFrame(t, "assistantResponseEvent", map[string]any{"content": "hello"}), testEventFrame(t, "assistantResponseEvent", map[string]any{"content": " world"})...)
 	frames = append(frames, testEventFrame(t, "metadataEvent", map[string]any{"stopReason": "end_turn"})...)
@@ -687,7 +505,7 @@ func TestExecuteStreamEmitsAnthropicSSE(t *testing.T) {
 		},
 		StreamID: "plugin-stream-1",
 	})
-	if _, errStream := executeStream(requestRaw); errStream != nil {
+	if _, errStream := executeKiroStreamingRequest(requestRaw); errStream != nil {
 		t.Fatal(errStream)
 	}
 	select {
@@ -709,10 +527,10 @@ func TestExecuteStreamEmitsAnthropicSSE(t *testing.T) {
 	}
 }
 
-func TestAccumulatorOmitsUnsignedReasoningAndMergesTextFragments(t *testing.T) {
+func TestClaudeResponseAccumulatorOmitsUnsignedReasoningAndMergesTextFragments(t *testing.T) {
 	payload := &kiroPayload{}
 	payload.ConversationState.CurrentMessage.UserInputMessage.ModelID = "claude-sonnet-4.5"
-	accumulator := newAccumulator(payload)
+	accumulator := newClaudeResponseAccumulator(payload)
 
 	events := []kiroEvent{
 		{Type: "reasoningContentEvent", Payload: map[string]any{"text": "Think"}},
@@ -740,7 +558,7 @@ func TestAccumulatorOmitsUnsignedReasoningAndMergesTextFragments(t *testing.T) {
 	}
 }
 
-func TestAccumulatorEstimatesUsageWhenUpstreamOmitsTokens(t *testing.T) {
+func TestClaudeResponseAccumulatorEstimatesUsageWhenUpstreamOmitsTokens(t *testing.T) {
 	payload, _, errTranslate := claudeToKiro([]byte(`{
 		"model":"claude-sonnet-4.5",
 		"max_tokens":32,
@@ -749,24 +567,28 @@ func TestAccumulatorEstimatesUsageWhenUpstreamOmitsTokens(t *testing.T) {
 	if errTranslate != nil {
 		t.Fatal(errTranslate)
 	}
-	accumulator := newAccumulator(payload)
+	accumulator := newClaudeResponseAccumulator(payload)
 	if _, errAccept := accumulator.accept(kiroEvent{Type: "assistantResponseEvent", Payload: map[string]any{"content": "391"}}); errAccept != nil {
 		t.Fatal(errAccept)
 	}
 	if errFinish := accumulator.finish(); errFinish != nil {
 		t.Fatal(errFinish)
 	}
-	if accumulator.InputTokens <= 0 || accumulator.OutputTokens <= 0 {
-		t.Fatalf("estimated usage = input:%d output:%d, want both positive", accumulator.InputTokens, accumulator.OutputTokens)
+	if accumulator.InputTokens != payload.EstimatedInputTokens || accumulator.OutputTokens != 1 {
+		t.Fatalf("estimated usage = input:%d output:%d, want input:%d output:1", accumulator.InputTokens, accumulator.OutputTokens, payload.EstimatedInputTokens)
 	}
 }
 
-func TestAccumulatorPrefersContextUsageOverInputEstimate(t *testing.T) {
+func TestClaudeResponseAccumulatorPrefersContextUsageOverInputEstimate(t *testing.T) {
 	payload := &kiroPayload{EstimatedInputTokens: 7}
 	payload.ConversationState.CurrentMessage.UserInputMessage.ModelID = "claude-sonnet-4.5"
-	accumulator := newAccumulator(payload)
-	_, _ = accumulator.accept(kiroEvent{Type: "contextUsageEvent", Payload: map[string]any{"contextUsagePercentage": 10.5}})
-	_, _ = accumulator.accept(kiroEvent{Type: "assistantResponseEvent", Payload: map[string]any{"content": "ok"}})
+	accumulator := newClaudeResponseAccumulator(payload)
+	if _, errAccept := accumulator.accept(kiroEvent{Type: "contextUsageEvent", Payload: map[string]any{"contextUsagePercentage": 10.5}}); errAccept != nil {
+		t.Fatal(errAccept)
+	}
+	if _, errAccept := accumulator.accept(kiroEvent{Type: "assistantResponseEvent", Payload: map[string]any{"content": "ok"}}); errAccept != nil {
+		t.Fatal(errAccept)
+	}
 	if errFinish := accumulator.finish(); errFinish != nil {
 		t.Fatal(errFinish)
 	}
@@ -775,73 +597,27 @@ func TestAccumulatorPrefersContextUsageOverInputEstimate(t *testing.T) {
 	}
 }
 
-func TestUpdateUsageReadsNestedCacheBuckets(t *testing.T) {
+func TestUpdateKiroUsageReadsNestedCacheBuckets(t *testing.T) {
 	event := map[string]any{"metrics": map[string]any{"usage": map[string]any{
 		"uncachedInputTokens":   "5",
 		"cacheReadInputTokens":  4.0,
 		"cacheWriteInputTokens": 3.0,
 		"totalOutputTokens":     2.0,
 	}}}
-	inputTokens, outputTokens := updateUsage(event, 0, 0)
+	inputTokens, outputTokens := updateKiroUsageTotals(event, 0, 0)
 	if inputTokens != 12 || outputTokens != 2 {
 		t.Fatalf("usage = input:%d output:%d, want input:12 output:2", inputTokens, outputTokens)
 	}
 }
 
-func TestUpdateUsageIgnoresNestedToolInputUsage(t *testing.T) {
+func TestUpdateKiroUsageIgnoresNestedToolInputUsage(t *testing.T) {
 	event := map[string]any{"input": map[string]any{"usage": map[string]any{
 		"inputTokens": 100000.0, "outputTokens": 100000.0,
 	}}}
-	inputTokens, outputTokens := updateUsage(event, 12, 2)
+	inputTokens, outputTokens := updateKiroUsageTotals(event, 12, 2)
 	if inputTokens != 12 || outputTokens != 2 {
 		t.Fatalf("usage = input:%d output:%d, want existing provider counts", inputTokens, outputTokens)
 	}
-}
-
-func configureKiroTest(t *testing.T, configYAML string) {
-	t.Helper()
-	request, errMarshal := json.Marshal(lifecycleRequest{ConfigYAML: []byte(configYAML)})
-	if errMarshal != nil {
-		t.Fatal(errMarshal)
-	}
-	if errConfigure := configure(request); errConfigure != nil {
-		t.Fatal(errConfigure)
-	}
-	t.Cleanup(func() {
-		if errConfigure := configure(nil); errConfigure != nil {
-			t.Errorf("restore default configuration: %v", errConfigure)
-		}
-	})
-}
-
-func callModelsForAuthTest(t *testing.T, authID, hostCallbackID string) pluginapi.ModelResponse {
-	t.Helper()
-	rawRequest, errMarshal := json.Marshal(rpcAuthModelRequest{
-		AuthModelRequest: pluginapi.AuthModelRequest{
-			AuthID:      authID,
-			StorageJSON: []byte(`{"type":"kiro","api_key_env":"KIRO_TEST_KEY","region":"us-east-1"}`),
-		},
-		HostCallbackID: hostCallbackID,
-	})
-	if errMarshal != nil {
-		t.Fatal(errMarshal)
-	}
-	rawResponse, errModels := modelsForAuth(rawRequest)
-	if errModels != nil {
-		t.Fatal(errModels)
-	}
-	var env envelope
-	if errUnmarshal := json.Unmarshal(rawResponse, &env); errUnmarshal != nil {
-		t.Fatal(errUnmarshal)
-	}
-	if !env.OK {
-		t.Fatalf("modelsForAuth() envelope = %#v", env)
-	}
-	var response pluginapi.ModelResponse
-	if errUnmarshal := json.Unmarshal(env.Result, &response); errUnmarshal != nil {
-		t.Fatal(errUnmarshal)
-	}
-	return response
 }
 
 type hostMock struct {

@@ -127,7 +127,7 @@ func regionFromProfileARN(arn string) string {
 	return parts[3]
 }
 
-func parseAuth(raw []byte) ([]byte, error) {
+func parseKiroAuth(raw []byte) ([]byte, error) {
 	var request pluginapi.AuthParseRequest
 	if errUnmarshal := json.Unmarshal(raw, &request); errUnmarshal != nil {
 		return nil, fmt.Errorf("decode auth parse request: %w", errUnmarshal)
@@ -223,7 +223,7 @@ func refreshInterval(credential kiroCredential) time.Duration {
 	return lifetime
 }
 
-func refreshAuth(raw []byte) ([]byte, error) {
+func refreshKiroAuth(raw []byte) ([]byte, error) {
 	var request rpcAuthRefreshRequest
 	if errUnmarshal := json.Unmarshal(raw, &request); errUnmarshal != nil {
 		return nil, fmt.Errorf("decode auth refresh request: %w", errUnmarshal)
@@ -357,7 +357,7 @@ func oidcHeaders() http.Header {
 	return http.Header{
 		"Content-Type":          []string{"application/json"},
 		"User-Agent":            []string{"aws-sdk-js/3.714.0 os/macos/24.3.0 lang/js md/nodejs/22.14.0 api/ssooidc/3.714.0 exec-env/kiro-cli/2.7.0 m/E"},
-		"Amz-Sdk-Invocation-Id": []string{randomUUID()},
+		"Amz-Sdk-Invocation-Id": []string{generateKiroUUID()},
 		"Amz-Sdk-Request":       []string{"attempt=1; max=1"},
 	}
 }

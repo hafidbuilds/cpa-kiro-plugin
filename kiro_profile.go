@@ -66,7 +66,7 @@ func candidateManagementRegions(primary string) []string {
 	return regions
 }
 
-// profileListing is exported to tests to build canned responses.
+// profileListing builds a Kiro profile-list response for tests.
 func profileListing(arns ...string) []byte {
 	var response listProfilesResponse
 	for _, arn := range arns {

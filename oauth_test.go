@@ -67,7 +67,7 @@ func TestParseAuthClassifiesOAuthAndAPIKeyCredentials(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			request, _ := json.Marshal(pluginapi.AuthParseRequest{FileName: "kiro-test.json", RawJSON: tt.raw})
-			raw, errParse := parseAuth(request)
+			raw, errParse := parseKiroAuth(request)
 			if errParse != nil {
 				t.Fatal(errParse)
 			}
@@ -132,14 +132,14 @@ func runRefresh(t *testing.T, storage []byte, attributes map[string]string) []by
 		AuthRefreshRequest: pluginapi.AuthRefreshRequest{AuthID: "kiro-idc.json", StorageJSON: storage, Attributes: attributes},
 		HostCallbackID:     "callback-refresh",
 	})
-	raw, errRefresh := refreshAuth(request)
+	raw, errRefresh := refreshKiroAuth(request)
 	if errRefresh != nil {
 		t.Fatal(errRefresh)
 	}
 	return raw
 }
 
-func TestRefreshAuthRotatesIDCTokensAcrossTwoCycles(t *testing.T) {
+func TestRefreshKiroAuthRotatesIDCTokensAcrossTwoCycles(t *testing.T) {
 	recorder := &refreshRecorder{t: t, respond: func(call int, request rpcHostHTTPRequest) pluginapi.HTTPResponse {
 		body := map[string]any{"accessToken": "access-1", "refreshToken": "refresh-1", "expiresIn": 3600}
 		if call == 2 {
@@ -203,7 +203,7 @@ func TestRefreshAuthRotatesIDCTokensAcrossTwoCycles(t *testing.T) {
 	}
 }
 
-func TestRefreshAuthMapsRejectedRefreshTokenToUpstreamStatus(t *testing.T) {
+func TestRefreshKiroAuthMapsRejectedRefreshTokenToUpstreamStatus(t *testing.T) {
 	recorder := &refreshRecorder{t: t, respond: func(int, rpcHostHTTPRequest) pluginapi.HTTPResponse {
 		return pluginapi.HTTPResponse{StatusCode: http.StatusBadRequest, Body: []byte(`{"error":"invalid_grant"}`)}
 	}}

@@ -6,20 +6,20 @@ import (
 	"strings"
 )
 
-func newAccumulator(payload *kiroPayload) *responseAccumulator {
+func newClaudeResponseAccumulator(payload *kiroPayload) *responseAccumulator {
 	return &responseAccumulator{
 		Model:                payload.ConversationState.CurrentMessage.UserInputMessage.ModelID,
-		ID:                   "msg_" + strings.ReplaceAll(randomUUID(), "-", ""),
+		ID:                   "msg_" + strings.ReplaceAll(generateKiroUUID(), "-", ""),
 		ToolNames:            payload.ToolNameMap,
 		EstimatedInputTokens: payload.EstimatedInputTokens,
 	}
 }
 
 func (a *responseAccumulator) accept(event kiroEvent) ([]claudeContentBlock, error) {
-	a.InputTokens, a.OutputTokens = updateUsage(event.Payload, a.InputTokens, a.OutputTokens)
+	a.InputTokens, a.OutputTokens = updateKiroUsageTotals(event.Payload, a.InputTokens, a.OutputTokens)
 	switch event.Type {
 	case "assistantResponseEvent":
-		if text := firstStringField(event.Payload, "content", "text"); text != "" {
+		if text := readFirstStringField(event.Payload, "content", "text"); text != "" {
 			block := claudeContentBlock{Type: "text", Text: text}
 			a.appendFragment(block)
 			return []claudeContentBlock{block}, nil
@@ -28,7 +28,7 @@ func (a *responseAccumulator) accept(event kiroEvent) ([]claudeContentBlock, err
 		// Kiro does not return an Anthropic-verifiable signature. Omit its
 		// reasoning instead of emitting a Claude thinking block that clients
 		// cannot safely replay.
-		a.HiddenReasoningTokens += estimateApproxTokens(firstStringField(event.Payload, "content", "text"))
+		a.HiddenReasoningTokens += estimateApproxTokens(readFirstStringField(event.Payload, "content", "text"))
 		return nil, nil
 	case "toolUseEvent":
 		tools, errTools := a.pendingTools.accept(event.Payload)
@@ -47,7 +47,7 @@ func (a *responseAccumulator) accept(event kiroEvent) ([]claudeContentBlock, err
 		}
 		return blocks, nil
 	case "metadataEvent":
-		if reason := firstStringField(event.Payload, "stopReason", "stop_reason"); reason != "" {
+		if reason := readFirstStringField(event.Payload, "stopReason", "stop_reason"); reason != "" {
 			a.StopReason = mapStopReason(reason)
 		}
 	case "meteringEvent":
@@ -55,7 +55,7 @@ func (a *responseAccumulator) accept(event kiroEvent) ([]claudeContentBlock, err
 			a.Credits += credits
 		}
 	case "contextUsageEvent":
-		if percentage, ok := readFloat(event.Payload, "contextUsagePercentage", "context_usage_percentage"); ok && percentage > 0 {
+		if percentage, ok := readNumericEventField(event.Payload, "contextUsagePercentage", "context_usage_percentage"); ok && percentage > 0 {
 			a.ContextUsagePercentage = percentage
 		}
 	}
@@ -172,7 +172,7 @@ func (w *claudeSSEWriter) start() ([][]byte, error) {
 		"content": []any{}, "stop_reason": nil, "stop_sequence": nil,
 		"usage": map[string]int{"input_tokens": w.accumulator.currentInputTokens(), "output_tokens": 0},
 	}
-	return marshalSSE("message_start", map[string]any{"type": "message_start", "message": message})
+	return marshalClaudeSSEEvent("message_start", map[string]any{"type": "message_start", "message": message})
 }
 
 func (w *claudeSSEWriter) blocks(blocks []claudeContentBlock) ([][]byte, error) {
@@ -200,7 +200,7 @@ func (w *claudeSSEWriter) blocks(blocks []claudeContentBlock) ([][]byte, error) 
 				return nil, errMarshal
 			}
 			delta := map[string]any{"type": "input_json_delta", "partial_json": string(inputJSON)}
-			blockFrames, errBlock := marshalCompleteContentBlock(index, contentBlock, delta)
+			blockFrames, errBlock := marshalClaudeCompleteContentBlock(index, contentBlock, delta)
 			if errBlock != nil {
 				return nil, errBlock
 			}
@@ -227,13 +227,13 @@ func (w *claudeSSEWriter) fragment(blockType string, contentBlock, delta any) ([
 		w.openType = blockType
 		w.openIndex = w.blockIndex
 		w.blockIndex++
-		startFrames, errStart := marshalSSE("content_block_start", map[string]any{"type": "content_block_start", "index": w.openIndex, "content_block": contentBlock})
+		startFrames, errStart := marshalClaudeSSEEvent("content_block_start", map[string]any{"type": "content_block_start", "index": w.openIndex, "content_block": contentBlock})
 		if errStart != nil {
 			return nil, errStart
 		}
 		frames = append(frames, startFrames...)
 	}
-	deltaFrames, errDelta := marshalSSE("content_block_delta", map[string]any{"type": "content_block_delta", "index": w.openIndex, "delta": delta})
+	deltaFrames, errDelta := marshalClaudeSSEEvent("content_block_delta", map[string]any{"type": "content_block_delta", "index": w.openIndex, "delta": delta})
 	if errDelta != nil {
 		return nil, errDelta
 	}
@@ -246,20 +246,20 @@ func (w *claudeSSEWriter) closeOpenBlock() ([][]byte, error) {
 	}
 	index := w.openIndex
 	w.openType = ""
-	return marshalSSE("content_block_stop", map[string]any{"type": "content_block_stop", "index": index})
+	return marshalClaudeSSEEvent("content_block_stop", map[string]any{"type": "content_block_stop", "index": index})
 }
 
-func marshalCompleteContentBlock(index int, contentBlock, delta any) ([][]byte, error) {
-	startFrames, errStart := marshalSSE("content_block_start", map[string]any{"type": "content_block_start", "index": index, "content_block": contentBlock})
+func marshalClaudeCompleteContentBlock(index int, contentBlock, delta any) ([][]byte, error) {
+	startFrames, errStart := marshalClaudeSSEEvent("content_block_start", map[string]any{"type": "content_block_start", "index": index, "content_block": contentBlock})
 	if errStart != nil {
 		return nil, errStart
 	}
-	deltaFrames, errDelta := marshalSSE("content_block_delta", map[string]any{"type": "content_block_delta", "index": index, "delta": delta})
+	deltaFrames, errDelta := marshalClaudeSSEEvent("content_block_delta", map[string]any{"type": "content_block_delta", "index": index, "delta": delta})
 	if errDelta != nil {
 		return nil, errDelta
 	}
 	frames := append(startFrames, deltaFrames...)
-	stopFrames, errStop := marshalSSE("content_block_stop", map[string]any{"type": "content_block_stop", "index": index})
+	stopFrames, errStop := marshalClaudeSSEEvent("content_block_stop", map[string]any{"type": "content_block_stop", "index": index})
 	if errStop != nil {
 		return nil, errStop
 	}
@@ -271,7 +271,7 @@ func (w *claudeSSEWriter) finish() ([][]byte, error) {
 	if errClose != nil {
 		return nil, errClose
 	}
-	deltaFrames, errDelta := marshalSSE("message_delta", map[string]any{
+	deltaFrames, errDelta := marshalClaudeSSEEvent("message_delta", map[string]any{
 		"type":  "message_delta",
 		"delta": map[string]any{"stop_reason": w.accumulator.StopReason, "stop_sequence": nil},
 		"usage": map[string]int{"input_tokens": w.accumulator.InputTokens, "output_tokens": w.accumulator.OutputTokens},
@@ -279,7 +279,7 @@ func (w *claudeSSEWriter) finish() ([][]byte, error) {
 	if errDelta != nil {
 		return nil, errDelta
 	}
-	stopFrames, errStop := marshalSSE("message_stop", map[string]any{"type": "message_stop"})
+	stopFrames, errStop := marshalClaudeSSEEvent("message_stop", map[string]any{"type": "message_stop"})
 	if errStop != nil {
 		return nil, errStop
 	}
@@ -287,7 +287,7 @@ func (w *claudeSSEWriter) finish() ([][]byte, error) {
 	return append(frames, stopFrames...), nil
 }
 
-func marshalSSE(event string, value any) ([][]byte, error) {
+func marshalClaudeSSEEvent(event string, value any) ([][]byte, error) {
 	raw, errMarshal := json.Marshal(value)
 	if errMarshal != nil {
 		return nil, errMarshal

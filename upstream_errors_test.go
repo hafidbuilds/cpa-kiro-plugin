@@ -111,9 +111,9 @@ func TestMonthlyQuotaBecomesCredentialScopedCooldownUntilReset(t *testing.T) {
 				var raw []byte
 				var errCall error
 				if mode == "execute" {
-					raw, errCall = execute(executorRequestRaw(t, ""))
+					raw, errCall = executeKiroRequest(executorRequestRaw(t, ""))
 				} else {
-					raw, errCall = executeStream(executorRequestRaw(t, "stream-quota"))
+					raw, errCall = executeKiroStreamingRequest(executorRequestRaw(t, "stream-quota"))
 				}
 				if errCall != nil {
 					t.Fatal(errCall)
@@ -145,7 +145,7 @@ func TestShortRateLimitKeepsModelScopeAndHeaderHint(t *testing.T) {
 	}
 	installFailingRuntime(t, runtime)
 
-	raw, errStream := executeStream(executorRequestRaw(t, "stream-rate"))
+	raw, errStream := executeKiroStreamingRequest(executorRequestRaw(t, "stream-rate"))
 	if errStream != nil {
 		t.Fatal(errStream)
 	}
@@ -165,7 +165,7 @@ func TestInvalidBearerTokenIsReportedAsUnauthorized(t *testing.T) {
 	}
 	installFailingRuntime(t, runtime)
 
-	raw, errExecute := execute(executorRequestRaw(t, ""))
+	raw, errExecute := executeKiroRequest(executorRequestRaw(t, ""))
 	if errExecute != nil {
 		t.Fatal(errExecute)
 	}

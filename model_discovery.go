@@ -55,20 +55,20 @@ var (
 	modelCache   = make(map[string]modelCacheEntry)
 )
 
-func modelsForAuth(raw []byte) ([]byte, error) {
+func discoverKiroModelsForAuth(raw []byte) ([]byte, error) {
 	var request rpcAuthModelRequest
 	if errUnmarshal := json.Unmarshal(raw, &request); errUnmarshal != nil {
 		return nil, fmt.Errorf("decode Kiro model discovery request: %w", errUnmarshal)
 	}
 
-	models, errDiscovery := accountModels(request)
+	models, errDiscovery := discoverKiroAccountModels(request)
 	if errDiscovery != nil {
 		logModelDiscoveryFallback(request, errDiscovery)
 	}
 	return okEnvelope(pluginapi.ModelResponse{Provider: pluginIdentifier, Models: models})
 }
 
-func accountModels(request rpcAuthModelRequest) ([]pluginapi.ModelInfo, error) {
+func discoverKiroAccountModels(request rpcAuthModelRequest) ([]pluginapi.ModelInfo, error) {
 	credential, handled, errCredential := decodeCredential(request.StorageJSON)
 	if errCredential != nil {
 		return configuredModels(), fmt.Errorf("decode credential: %w", errCredential)

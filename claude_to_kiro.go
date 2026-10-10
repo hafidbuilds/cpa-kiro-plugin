@@ -60,8 +60,8 @@ func claudeToKiro(raw []byte, requestedModel string) (*kiroPayload, *claudeReque
 	payload := &kiroPayload{}
 	payload.ConversationState.ChatTriggerType = "MANUAL"
 	payload.ConversationState.AgentTaskType = "vibe"
-	payload.ConversationState.AgentContinuationID = randomUUID()
-	payload.ConversationState.ConversationID = conversationID(model, systemPrompt, firstUserAnchor(request.Messages))
+	payload.ConversationState.AgentContinuationID = generateKiroUUID()
+	payload.ConversationState.ConversationID = buildKiroConversationID(model, systemPrompt, firstUserAnchor(request.Messages))
 
 	history := make([]kiroHistoryMessage, 0, len(request.Messages)+2)
 	if systemPrompt != "" {
@@ -71,7 +71,7 @@ func claudeToKiro(raw []byte, requestedModel string) (*kiroPayload, *claudeReque
 		)
 	}
 
-	tools, nameMap, requestToolNames := convertTools(request.Tools)
+	tools, nameMap, requestToolNames := convertClaudeToolsToKiro(request.Tools)
 	var currentText string
 	var currentImages []kiroImage
 	var currentToolResults []kiroToolResult
@@ -84,7 +84,7 @@ func claudeToKiro(raw []byte, requestedModel string) (*kiroPayload, *claudeReque
 				currentText, currentImages, currentToolResults = text, images, toolResults
 				continue
 			}
-			userMessage := &kiroUserInputMessage{Content: fallbackContent(text, len(images) > 0), ModelID: model, Origin: "KIRO_CLI", Images: images}
+			userMessage := &kiroUserInputMessage{Content: chooseKiroFallbackContent(text, len(images) > 0), ModelID: model, Origin: "KIRO_CLI", Images: images}
 			if len(toolResults) > 0 {
 				userMessage.UserInputMessageContext = &kiroUserMessageContext{ToolResults: toolResults}
 			}
@@ -97,10 +97,10 @@ func claudeToKiro(raw []byte, requestedModel string) (*kiroPayload, *claudeReque
 
 	payload.ToolNameMap = nameMap
 	if len(currentToolResults) > 0 {
-		currentText = joinNonEmpty(currentText, readableToolResults(currentToolResults))
+		currentText = joinNonEmptyText(currentText, readableToolResults(currentToolResults))
 	}
 	current := kiroUserInputMessage{
-		Content: fallbackContent(currentText, len(currentImages) > 0),
+		Content: chooseKiroFallbackContent(currentText, len(currentImages) > 0),
 		ModelID: model,
 		Origin:  "KIRO_CLI",
 		Images:  currentImages,
@@ -109,11 +109,11 @@ func claudeToKiro(raw []byte, requestedModel string) (*kiroPayload, *claudeReque
 		current.UserInputMessageContext = &kiroUserMessageContext{Tools: tools, ToolResults: currentToolResults}
 	}
 	payload.ConversationState.CurrentMessage.UserInputMessage = current
-	payload.ConversationState.History = trimLeadingAssistant(history)
+	payload.ConversationState.History = trimLeadingAssistantHistory(history)
 	if request.MaxTokens > 0 || request.Temperature != nil || request.TopP != nil {
 		payload.InferenceConfig = &kiroInferenceConfig{MaxTokens: request.MaxTokens, Temperature: request.Temperature, TopP: request.TopP}
 	}
-	if errTruncate := truncatePayload(payload, systemPrompt != ""); errTruncate != nil {
+	if errTruncate := truncateKiroPayload(payload, systemPrompt != ""); errTruncate != nil {
 		return nil, nil, errTruncate
 	}
 	payload.EstimatedInputTokens = estimateJSONTokens(payload)
@@ -121,7 +121,7 @@ func claudeToKiro(raw []byte, requestedModel string) (*kiroPayload, *claudeReque
 }
 
 func validateClaudeImageSources(content any) error {
-	for _, block := range contentBlocks(content) {
+	for _, block := range extractClaudeContentBlocks(content) {
 		typeName, _ := block["type"].(string)
 		switch typeName {
 		case "image", "input_image":
@@ -180,7 +180,7 @@ func extractUserContent(content any) (string, []kiroImage, []kiroToolResult) {
 	var texts []string
 	var images []kiroImage
 	var results []kiroToolResult
-	for _, block := range contentBlocks(content) {
+	for _, block := range extractClaudeContentBlocks(content) {
 		typeName, _ := block["type"].(string)
 		switch typeName {
 		case "text", "input_text":
@@ -188,7 +188,7 @@ func extractUserContent(content any) (string, []kiroImage, []kiroToolResult) {
 				texts = append(texts, text)
 			}
 		case "image", "input_image":
-			if image := extractImage(block); image != nil {
+			if image := extractClaudeImage(block); image != nil {
 				images = append(images, *image)
 			}
 		case "tool_result":
@@ -199,7 +199,7 @@ func extractUserContent(content any) (string, []kiroImage, []kiroToolResult) {
 			if isError, _ := block["is_error"].(bool); isError {
 				status = "error"
 			}
-			results = append(results, kiroToolResult{ToolUseID: toolUseID, Content: []kiroResultContent{{Text: fallbackContent(text, len(resultImages) > 0)}}, Status: status})
+			results = append(results, kiroToolResult{ToolUseID: toolUseID, Content: []kiroResultContent{{Text: chooseKiroFallbackContent(text, len(resultImages) > 0)}}, Status: status})
 		}
 	}
 	return strings.Join(texts, ""), images, results
@@ -211,7 +211,7 @@ func extractAssistantContent(content any, toolNames map[string]string) (string, 
 	}
 	var texts []string
 	var tools []kiroToolUse
-	for _, block := range contentBlocks(content) {
+	for _, block := range extractClaudeContentBlocks(content) {
 		typeName, _ := block["type"].(string)
 		switch typeName {
 		case "text":
@@ -223,7 +223,7 @@ func extractAssistantContent(content any, toolNames map[string]string) (string, 
 			name, _ := block["name"].(string)
 			kiroName := toolNames[name]
 			if kiroName == "" {
-				kiroName = sanitizeToolName(name)
+				kiroName = sanitizeKiroToolName(name)
 			}
 			input, _ := block["input"].(map[string]any)
 			if input == nil {
@@ -235,7 +235,7 @@ func extractAssistantContent(content any, toolNames map[string]string) (string, 
 	return strings.Join(texts, ""), tools
 }
 
-func contentBlocks(content any) []map[string]any {
+func extractClaudeContentBlocks(content any) []map[string]any {
 	items, ok := content.([]any)
 	if !ok {
 		return nil
@@ -249,7 +249,7 @@ func contentBlocks(content any) []map[string]any {
 	return blocks
 }
 
-func extractImage(block map[string]any) *kiroImage {
+func extractClaudeImage(block map[string]any) *kiroImage {
 	source, ok := block["source"].(map[string]any)
 	if !ok {
 		return nil
@@ -278,18 +278,18 @@ func extractToolResultContent(content any) (string, []kiroImage) {
 	}
 	var texts []string
 	var images []kiroImage
-	for _, block := range contentBlocks(content) {
+	for _, block := range extractClaudeContentBlocks(content) {
 		if text, ok := block["text"].(string); ok {
 			texts = append(texts, text)
 		}
-		if image := extractImage(block); image != nil {
+		if image := extractClaudeImage(block); image != nil {
 			images = append(images, *image)
 		}
 	}
 	return strings.Join(texts, ""), images
 }
 
-func convertTools(tools []claudeTool) ([]kiroToolWrapper, map[string]string, map[string]string) {
+func convertClaudeToolsToKiro(tools []claudeTool) ([]kiroToolWrapper, map[string]string, map[string]string) {
 	out := make([]kiroToolWrapper, 0, len(tools))
 	nameMap := make(map[string]string)
 	requestNameMap := make(map[string]string)
@@ -298,7 +298,7 @@ func convertTools(tools []claudeTool) ([]kiroToolWrapper, map[string]string, map
 		if strings.HasPrefix(strings.ToLower(tool.Type), "web_search") {
 			continue
 		}
-		name := uniqueToolName(sanitizeToolName(tool.Name), used)
+		name := allocateUniqueKiroToolName(sanitizeKiroToolName(tool.Name), used)
 		requestNameMap[tool.Name] = name
 		if name != tool.Name {
 			nameMap[name] = tool.Name
@@ -330,7 +330,7 @@ func convertTools(tools []claudeTool) ([]kiroToolWrapper, map[string]string, map
 	return out, nameMap, requestNameMap
 }
 
-func sanitizeToolName(name string) string {
+func sanitizeKiroToolName(name string) string {
 	name = invalidToolNamePattern.ReplaceAllString(strings.TrimSpace(name), "_")
 	name = strings.Trim(name, "_")
 	if name == "" {
@@ -342,7 +342,7 @@ func sanitizeToolName(name string) string {
 	return name
 }
 
-func uniqueToolName(name string, used map[string]struct{}) string {
+func allocateUniqueKiroToolName(name string, used map[string]struct{}) string {
 	if _, exists := used[name]; !exists {
 		used[name] = struct{}{}
 		return name
@@ -377,7 +377,7 @@ func readableToolResults(results []kiroToolResult) string {
 	return "Tool results:\n\n" + strings.Join(parts, "\n\n")
 }
 
-func fallbackContent(content string, hasImage bool) string {
+func chooseKiroFallbackContent(content string, hasImage bool) string {
 	if strings.TrimSpace(content) != "" {
 		return content
 	}
@@ -387,7 +387,7 @@ func fallbackContent(content string, hasImage bool) string {
 	return "."
 }
 
-func joinNonEmpty(left, right string) string {
+func joinNonEmptyText(left, right string) string {
 	left, right = strings.TrimSpace(left), strings.TrimSpace(right)
 	if left == "" {
 		return right
@@ -398,7 +398,7 @@ func joinNonEmpty(left, right string) string {
 	return left + "\n\n" + right
 }
 
-func trimLeadingAssistant(history []kiroHistoryMessage) []kiroHistoryMessage {
+func trimLeadingAssistantHistory(history []kiroHistoryMessage) []kiroHistoryMessage {
 	for len(history) > 0 && history[0].AssistantResponseMessage != nil {
 		history = history[1:]
 	}
@@ -417,19 +417,19 @@ func firstUserAnchor(messages []claudeMessage) string {
 	return ""
 }
 
-func conversationID(model, systemPrompt, anchor string) string {
+func buildKiroConversationID(model, systemPrompt, anchor string) string {
 	if strings.TrimSpace(anchor) == "" {
-		return randomUUID()
+		return generateKiroUUID()
 	}
 	seed := strings.Join([]string{model, strings.TrimSpace(systemPrompt), strings.TrimSpace(anchor)}, "\n")
 	sum := sha1.Sum(append([]byte("6ba7b8119dad11d180b400c04fd430c8"), []byte(seed)...))
 	b := sum[:16]
 	b[6] = (b[6] & 0x0f) | 0x50
 	b[8] = (b[8] & 0x3f) | 0x80
-	return formatUUID(b)
+	return formatUUIDBytes(b)
 }
 
-func randomUUID() string {
+func generateKiroUUID() string {
 	b := make([]byte, 16)
 	if _, errRead := rand.Read(b); errRead != nil {
 		sum := sha1.Sum([]byte(fmt.Sprintf("fallback-%p", &b)))
@@ -437,15 +437,15 @@ func randomUUID() string {
 	}
 	b[6] = (b[6] & 0x0f) | 0x40
 	b[8] = (b[8] & 0x3f) | 0x80
-	return formatUUID(b)
+	return formatUUIDBytes(b)
 }
 
-func formatUUID(b []byte) string {
+func formatUUIDBytes(b []byte) string {
 	hexValue := hex.EncodeToString(b)
 	return hexValue[:8] + "-" + hexValue[8:12] + "-" + hexValue[12:16] + "-" + hexValue[16:20] + "-" + hexValue[20:32]
 }
 
-func truncatePayload(payload *kiroPayload, preserveSystemPair bool) error {
+func truncateKiroPayload(payload *kiroPayload, preserveSystemPair bool) error {
 	protected := 0
 	if preserveSystemPair {
 		protected = 2

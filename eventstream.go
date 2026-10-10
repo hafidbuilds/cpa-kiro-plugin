@@ -16,6 +16,7 @@ type eventStreamDecoder struct {
 	buffer []byte
 }
 
+// Feed decodes complete Kiro event-stream frames and retains incomplete bytes for the next chunk.
 func (d *eventStreamDecoder) Feed(chunk []byte) ([]kiroEvent, error) {
 	if len(chunk) > 0 {
 		d.buffer = append(d.buffer, chunk...)
@@ -43,7 +44,7 @@ func (d *eventStreamDecoder) Feed(chunk []byte) ([]kiroEvent, error) {
 		if crc32.ChecksumIEEE(frame[:totalLength-4]) != binary.BigEndian.Uint32(frame[totalLength-4:]) {
 			return nil, errors.New("Kiro event message CRC mismatch")
 		}
-		headers, errHeaders := parseEventHeaders(frame[12 : 12+headersLength])
+		headers, errHeaders := parseKiroEventHeaders(frame[12 : 12+headersLength])
 		if errHeaders != nil {
 			return nil, fmt.Errorf("decode Kiro event headers: %w", errHeaders)
 		}
@@ -56,7 +57,7 @@ func (d *eventStreamDecoder) Feed(chunk []byte) ([]kiroEvent, error) {
 		}
 		messageType := headers[":message-type"]
 		if messageType == "error" || messageType == "exception" {
-			message := firstStringField(payload, "message", "errorMessage")
+			message := readFirstStringField(payload, "message", "errorMessage")
 			if message == "" {
 				message = messageType
 			}
@@ -67,6 +68,7 @@ func (d *eventStreamDecoder) Feed(chunk []byte) ([]kiroEvent, error) {
 	}
 }
 
+// Finish rejects an event stream that ends with an incomplete Kiro event frame.
 func (d *eventStreamDecoder) Finish() error {
 	if len(d.buffer) != 0 {
 		return fmt.Errorf("incomplete Kiro event frame: %d buffered bytes", len(d.buffer))
@@ -74,7 +76,7 @@ func (d *eventStreamDecoder) Finish() error {
 	return nil
 }
 
-func parseEventHeaders(data []byte) (map[string]string, error) {
+func parseKiroEventHeaders(data []byte) (map[string]string, error) {
 	headers := make(map[string]string)
 	for offset := 0; offset < len(data); {
 		nameLength := int(data[offset])
@@ -134,9 +136,9 @@ type pendingToolUses struct {
 }
 
 func (p *pendingToolUses) accept(event map[string]any) ([]kiroToolUse, error) {
-	id := firstStringField(event, "toolUseId", "toolUseID", "tool_use_id", "id")
-	name := firstStringField(event, "name", "toolName", "tool_name")
-	stop := firstBoolField(event, "stop", "isStop", "done")
+	id := readFirstStringField(event, "toolUseId", "toolUseID", "tool_use_id", "id")
+	name := readFirstStringField(event, "name", "toolName", "tool_name")
+	stop := readFirstBoolField(event, "stop", "isStop", "done")
 	if p.byID == nil {
 		p.byID = make(map[string]*pendingToolUse)
 	}
@@ -145,7 +147,7 @@ func (p *pendingToolUses) accept(event map[string]any) ([]kiroToolUse, error) {
 	}
 	generated := false
 	if id == "" && name != "" {
-		id = "toolu_" + randomUUID()
+		id = "toolu_" + generateKiroUUID()
 		generated = true
 	}
 	if id == "" {
@@ -238,7 +240,7 @@ func finishPendingTool(state *pendingToolUse) (kiroToolUse, error) {
 	return kiroToolUse{ToolUseID: state.ID, Name: state.Name, Input: input}, nil
 }
 
-func firstStringField(values map[string]any, keys ...string) string {
+func readFirstStringField(values map[string]any, keys ...string) string {
 	for _, key := range keys {
 		if value, ok := values[key].(string); ok && value != "" {
 			return value
@@ -247,7 +249,7 @@ func firstStringField(values map[string]any, keys ...string) string {
 	return ""
 }
 
-func firstBoolField(values map[string]any, keys ...string) bool {
+func readFirstBoolField(values map[string]any, keys ...string) bool {
 	for _, key := range keys {
 		if value, ok := values[key].(bool); ok {
 			return value
@@ -256,12 +258,12 @@ func firstBoolField(values map[string]any, keys ...string) bool {
 	return false
 }
 
-func readNumber(values map[string]any, keys ...string) (int, bool) {
-	value, ok := readFloat(values, keys...)
+func readNumericEventValue(values map[string]any, keys ...string) (int, bool) {
+	value, ok := readNumericEventField(values, keys...)
 	return int(value), ok
 }
 
-func readFloat(values map[string]any, keys ...string) (float64, bool) {
+func readNumericEventField(values map[string]any, keys ...string) (float64, bool) {
 	for _, key := range keys {
 		switch value := values[key].(type) {
 		case float64:
@@ -285,38 +287,38 @@ func readFloat(values map[string]any, keys ...string) (float64, bool) {
 	return 0, false
 }
 
-func updateUsage(event map[string]any, inputTokens, outputTokens int) (int, int) {
+func updateKiroUsageTotals(event map[string]any, inputTokens, outputTokens int) (int, int) {
 	candidates := []map[string]any{event}
-	appendDirectUsageMaps(event, &candidates)
+	appendNestedUsageMaps(event, &candidates)
 	for _, key := range []string{"metrics", "metadata"} {
 		if container, ok := event[key].(map[string]any); ok {
 			candidates = append(candidates, container)
-			appendDirectUsageMaps(container, &candidates)
+			appendNestedUsageMaps(container, &candidates)
 		}
 	}
 	for _, candidate := range candidates {
-		if value, ok := readNumber(candidate, "outputTokens", "completionTokens", "totalOutputTokens", "output_tokens", "completion_tokens", "total_output_tokens"); ok {
+		if value, ok := readNumericEventValue(candidate, "outputTokens", "completionTokens", "totalOutputTokens", "output_tokens", "completion_tokens", "total_output_tokens"); ok {
 			outputTokens = value
 		}
-		if value, ok := readNumber(candidate, "inputTokens", "promptTokens", "totalInputTokens", "input_tokens", "prompt_tokens", "total_input_tokens"); ok {
+		if value, ok := readNumericEventValue(candidate, "inputTokens", "promptTokens", "totalInputTokens", "input_tokens", "prompt_tokens", "total_input_tokens"); ok {
 			inputTokens = value
 			continue
 		}
-		uncached, _ := readNumber(candidate, "uncachedInputTokens", "uncached_input_tokens")
-		cacheRead, _ := readNumber(candidate, "cacheReadInputTokens", "cache_read_input_tokens")
-		cacheWrite, _ := readNumber(candidate, "cacheWriteInputTokens", "cache_write_input_tokens", "cacheCreationInputTokens", "cache_creation_input_tokens")
+		uncached, _ := readNumericEventValue(candidate, "uncachedInputTokens", "uncached_input_tokens")
+		cacheRead, _ := readNumericEventValue(candidate, "cacheReadInputTokens", "cache_read_input_tokens")
+		cacheWrite, _ := readNumericEventValue(candidate, "cacheWriteInputTokens", "cache_write_input_tokens", "cacheCreationInputTokens", "cache_creation_input_tokens")
 		if uncached+cacheRead+cacheWrite > 0 {
 			inputTokens = uncached + cacheRead + cacheWrite
 			continue
 		}
-		if total, ok := readNumber(candidate, "totalTokens", "total_tokens"); ok && total > outputTokens {
+		if total, ok := readNumericEventValue(candidate, "totalTokens", "total_tokens"); ok && total > outputTokens {
 			inputTokens = total - outputTokens
 		}
 	}
 	return inputTokens, outputTokens
 }
 
-func appendDirectUsageMaps(value map[string]any, candidates *[]map[string]any) {
+func appendNestedUsageMaps(value map[string]any, candidates *[]map[string]any) {
 	for _, key := range []string{"usage", "tokenUsage", "token_usage"} {
 		if nested, ok := value[key].(map[string]any); ok {
 			*candidates = append(*candidates, nested)
