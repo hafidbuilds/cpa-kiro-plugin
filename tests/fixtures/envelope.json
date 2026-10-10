@@ -1,0 +1,63 @@
+{
+  "ok": {
+    "ok": true,
+    "result": { "identifier": "kiro" }
+  },
+  "error_unknown_method": {
+    "ok": false,
+    "error": {
+      "code": "unknown_method",
+      "message": "unknown method: plugin.missing"
+    }
+  },
+  "error_invalid_method": {
+    "ok": false,
+    "error": {
+      "code": "invalid_method",
+      "message": "method is required"
+    }
+  },
+  "error_invalid_auth_empty_env": {
+    "ok": false,
+    "error": {
+      "code": "invalid_auth",
+      "message": "Kiro API key unavailable: environment variable KIRO_MISSING_TEST_KEY is empty",
+      "http_status": 401
+    }
+  },
+  "error_refresh_invalid_grant": {
+    "ok": false,
+    "error": {
+      "code": "refresh_failed",
+      "message": "Kiro token refresh failed: HTTP 400: {\"error\":\"invalid_grant\"}",
+      "http_status": 400
+    }
+  },
+  "error_quota_exhausted": {
+    "ok": false,
+    "error": {
+      "code": "quota_exhausted",
+      "message": "Kiro upstream HTTP 400: {\"reason\":\"MONTHLY_REQUEST_COUNT\"}",
+      "http_status": 429,
+      "retry_after_ms": 1900800000,
+      "credential_scoped": true
+    }
+  },
+  "error_rate_limited": {
+    "ok": false,
+    "error": {
+      "code": "rate_limited",
+      "message": "Kiro upstream HTTP 429: rate limited",
+      "http_status": 429,
+      "retryable": true
+    }
+  },
+  "error_invalid_request_missing_stream_id": {
+    "ok": false,
+    "error": {
+      "code": "invalid_request",
+      "message": "stream_id is required",
+      "http_status": 400
+    }
+  }
+}

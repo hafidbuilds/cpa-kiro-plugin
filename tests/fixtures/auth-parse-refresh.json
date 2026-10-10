@@ -1,0 +1,200 @@
+{
+  "credential_fields": [
+    "type", "auth_method", "api_key", "api_key_env", "region", "profile_arn",
+    "access_token", "refresh_token", "expired", "client_id", "client_secret",
+    "start_url", "token_endpoint", "email", "label", "prefix", "proxy_url", "disabled"
+  ],
+  "auth_methods": ["apikey", "idc", "desktop", "external-idp"],
+  "parse": {
+    "method": "auth.parse",
+    "request_fields": ["Provider", "Path", "FileName", "RawJSON", "Host"],
+    "api_key_env": {
+      "request": {
+        "FileName": "kiro-pro.json",
+        "RawJSON": "eyJ0eXBlIjoia2lybyIsImFwaV9rZXlfZW52IjoiS0lST19URVNUX0tFWSIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImxhYmVsIjoicHJvIn0="
+      },
+      "request_storage_object": {
+        "type": "kiro",
+        "api_key_env": "KIRO_TEST_KEY",
+        "region": "us-east-1",
+        "label": "pro"
+      },
+      "response": {
+        "ok": true,
+        "result": {
+          "Handled": true,
+          "Auth": {
+            "Provider": "kiro",
+            "ID": "kiro-pro.json",
+            "FileName": "kiro-pro.json",
+            "Label": "pro",
+            "StorageJSON": "eyJ0eXBlIjoia2lybyIsImF1dGhfbWV0aG9kIjoiYXBpa2V5IiwiYXBpX2tleV9lbnYiOiJLSVJPX1RFU1RfS0VZIiwicmVnaW9uIjoidXMtZWFzdC0xIiwibGFiZWwiOiJwcm8ifQ==",
+            "Metadata": {
+              "type": "kiro",
+              "auth_method": "apikey",
+              "region": "us-east-1",
+              "auth_kind": "api_key",
+              "key_source": "env:KIRO_TEST_KEY",
+              "key_present": true
+            },
+            "Attributes": {
+              "auth_method": "apikey",
+              "region": "us-east-1",
+              "auth_kind": "api_key"
+            }
+          }
+        }
+      },
+      "notes": [
+        "StorageJSON must not contain the resolved environment secret.",
+        "Missing type=kiro yields Handled=false.",
+        "Invalid region yields ok=false error.code=invalid_auth."
+      ]
+    },
+    "idc_oauth": {
+      "request": {
+        "FileName": "kiro-test.json",
+        "RawJSON": "eyJ0eXBlIjoia2lybyIsImF1dGhfbWV0aG9kIjoiaWRjIiwicmVnaW9uIjoidXMtZWVhc3QtMSIsInByb2ZpbGVfYXJuIjoiYXJuOmF3czpjb2Rld2hpc3BlcmVyOnVzLWVhc3QtMToxMTExMTExMTExMTE6cHJvZmlsZS9JRENURVNUIiwiYWNjZXNzX3Rva2VuIjoiUkVEQUNURURfQUNDRVNTX1RPS0VOIiwicmVmcmVzaF90b2tlbiI6IlJFREFDVEVEX1JFRlJFU0hfVE9LRU4iLCJleHBpcmVkIjoiMjAyNi0xMC0xMFQwMTowMDowMFoiLCJjbGllbnRfaWQiOiJSRURBQ1RFRF9DTElFTlRfSUQiLCJjbGllbnRfc2VjcmV0IjoiUkVEQUNURURfQ0xJRU5UX1NFQ1JFVCIsInN0YXJ0X3VybCI6Imh0dHBzOi8vdmlldy5hd3NhcHBzLmNvbS9zdGFydCJ9"
+      },
+      "request_storage_object": {
+        "type": "kiro",
+        "auth_method": "idc",
+        "region": "us-east-1",
+        "profile_arn": "arn:aws:codewhisperer:us-east-1:111111111111:profile/IDCTEST",
+        "access_token": "REDACTED_ACCESS_TOKEN",
+        "refresh_token": "REDACTED_REFRESH_TOKEN",
+        "expired": "2026-10-10T01:00:00Z",
+        "client_id": "REDACTED_CLIENT_ID",
+        "client_secret": "REDACTED_CLIENT_SECRET",
+        "start_url": "https://view.awsapps.com/start"
+      },
+      "response": {
+        "ok": true,
+        "result": {
+          "Handled": true,
+          "Auth": {
+            "Provider": "kiro",
+            "ID": "kiro-test.json",
+            "FileName": "kiro-test.json",
+            "Label": "kiro-test",
+            "StorageJSON_object": {
+              "type": "kiro",
+              "auth_method": "idc",
+              "region": "us-east-1",
+              "profile_arn": "arn:aws:codewhisperer:us-east-1:111111111111:profile/IDCTEST",
+              "access_token": "REDACTED_ACCESS_TOKEN",
+              "refresh_token": "REDACTED_REFRESH_TOKEN",
+              "expired": "2026-10-10T01:00:00Z",
+              "client_id": "REDACTED_CLIENT_ID",
+              "client_secret": "REDACTED_CLIENT_SECRET",
+              "start_url": "https://view.awsapps.com/start"
+            },
+            "Metadata": {
+              "type": "kiro",
+              "auth_method": "idc",
+              "region": "us-east-1",
+              "auth_kind": "oauth",
+              "access_token": "REDACTED_ACCESS_TOKEN",
+              "refresh_token": "REDACTED_REFRESH_TOKEN",
+              "expired": "2026-10-10T01:00:00Z",
+              "profile_arn": "arn:aws:codewhisperer:us-east-1:111111111111:profile/IDCTEST",
+              "refresh_interval_seconds": 3300
+            },
+            "Attributes": {
+              "auth_method": "idc",
+              "region": "us-east-1",
+              "auth_kind": "oauth",
+              "profile_arn": "arn:aws:codewhisperer:us-east-1:111111111111:profile/IDCTEST"
+            }
+          }
+        }
+      },
+      "notes": [
+        "refresh_interval_seconds = remaining lifetime minus 5m, floored at 60s.",
+        "With frozen now 2026-10-10T00:00:00Z and expired 2026-10-10T01:00:00Z the interval is 3300."
+      ]
+    },
+    "unhandled": {
+      "request": { "FileName": "other.json", "RawJSON": "eyJ0eXBlIjoidW5rbm93biJ9" },
+      "response": { "ok": true, "result": { "Handled": false } }
+    },
+    "invalid_region": {
+      "request_storage_object": {
+        "type": "kiro",
+        "api_key_env": "KEY",
+        "region": "us-east-1.kiro.dev.evil"
+      },
+      "response": {
+        "ok": false,
+        "error": {
+          "code": "invalid_auth",
+          "message": "invalid Kiro region \"us-east-1.kiro.dev.evil\""
+        }
+      }
+    }
+  },
+  "refresh": {
+    "method": "auth.refresh",
+    "request": {
+      "AuthID": "kiro-idc.json",
+      "StorageJSON_object": {
+        "type": "kiro",
+        "auth_method": "idc",
+        "region": "us-east-1",
+        "profile_arn": "arn:aws:codewhisperer:us-east-1:111111111111:profile/IDCTEST",
+        "access_token": "REDACTED_ACCESS_OLD",
+        "refresh_token": "REDACTED_REFRESH_OLD",
+        "expired": "2026-10-09T23:59:00Z",
+        "client_id": "REDACTED_CLIENT_ID",
+        "client_secret": "REDACTED_CLIENT_SECRET",
+        "start_url": "https://view.awsapps.com/start"
+      },
+      "Attributes": { "path": "/auths/kiro-idc.json", "priority": "5" },
+      "host_callback_id": "callback-refresh"
+    },
+    "oidc_request": {
+      "url": "https://oidc.us-east-1.amazonaws.com/token",
+      "body": {
+        "clientId": "REDACTED_CLIENT_ID",
+        "clientSecret": "REDACTED_CLIENT_SECRET",
+        "refreshToken": "REDACTED_REFRESH_OLD",
+        "grantType": "refresh_token"
+      }
+    },
+    "oidc_response": {
+      "accessToken": "REDACTED_ACCESS_NEW",
+      "refreshToken": "REDACTED_REFRESH_NEW",
+      "expiresIn": 3600
+    },
+    "desktop_refresh_url": "https://prod.us-east-1.auth.desktop.kiro.dev/refreshToken",
+    "desktop_refresh_body": { "refreshToken": "REDACTED_REFRESH_OLD" },
+    "response": {
+      "ok": true,
+      "result": {
+        "Auth": {
+          "Provider": "kiro",
+          "ID": "kiro-idc.json",
+          "Metadata": {
+            "auth_kind": "oauth",
+            "access_token": "REDACTED_ACCESS_NEW",
+            "refresh_token": "REDACTED_REFRESH_NEW",
+            "expired": "2026-10-10T01:00:00Z",
+            "refresh_interval_seconds": 3300
+          },
+          "Attributes": {
+            "path": "/auths/kiro-idc.json",
+            "priority": "5",
+            "auth_kind": "oauth",
+            "region": "us-east-1",
+            "profile_arn": "arn:aws:codewhisperer:us-east-1:111111111111:profile/IDCTEST"
+          }
+        }
+      }
+    },
+    "notes": [
+      "An omitted refreshToken in the token response keeps the previous refresh token.",
+      "Host Attributes are merged over plugin attributes.",
+      "invalid_grant maps to refresh_failed with http_status from the token endpoint and retryable omitted/false."
+    ]
+  }
+}

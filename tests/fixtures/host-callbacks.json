@@ -1,0 +1,71 @@
+{
+  "host_http_do": {
+    "method": "host.http.do",
+    "request": {
+      "host_callback_id": "callback-1",
+      "method": "POST",
+      "url": "https://oidc.us-east-1.amazonaws.com/token",
+      "headers": { "Content-Type": ["application/json"] },
+      "body": "eyJncmFudFR5cGUiOiJyZWZyZXNoX3Rva2VuIn0="
+    },
+    "response_result": {
+      "StatusCode": 200,
+      "Headers": { "Content-Type": ["application/json"] },
+      "Body": "eyJhY2Nlc3NUb2tlbiI6IlJFREFDVEVEX0FDQ0VTU19UT0tFTiJ9"
+    }
+  },
+  "host_http_do_stream": {
+    "method": "host.http.do_stream",
+    "request": {
+      "host_callback_id": "cb-exec",
+      "method": "POST",
+      "url": "https://runtime.us-east-1.kiro.dev/",
+      "headers": { "X-Amz-Target": ["AmazonCodeWhispererStreamingService.GenerateAssistantResponse"] },
+      "body": "<base64 Kiro conversationState JSON>"
+    },
+    "response_result": {
+      "status_code": 200,
+      "stream_id": "upstream-1"
+    }
+  },
+  "host_http_stream_read": {
+    "method": "host.http.stream_read",
+    "request": { "stream_id": "upstream-1" },
+    "response_chunk": { "payload": "<base64 EventStream bytes>", "done": false },
+    "response_end": { "done": true }
+  },
+  "host_http_stream_close": {
+    "method": "host.http.stream_close",
+    "request": { "stream_id": "upstream-1" },
+    "response_result": {}
+  },
+  "host_stream_emit": {
+    "method": "host.stream.emit",
+    "request": {
+      "stream_id": "plugin-stream-1",
+      "payload": "<base64 Anthropic SSE bytes>"
+    }
+  },
+  "host_stream_close": {
+    "method": "host.stream.close",
+    "request": { "stream_id": "plugin-stream-1" }
+  },
+  "host_log": {
+    "method": "host.log",
+    "request": {
+      "host_callback_id": "callback-1",
+      "level": "warn",
+      "message": "Kiro model discovery failed; using cached or configured models",
+      "fields": { "auth_id": "kiro-pro" }
+    }
+  },
+  "host_envelope": {
+    "ok": { "ok": true, "result": {} },
+    "error": { "ok": false, "error": { "code": "host_error", "message": "transport failed" } }
+  },
+  "notes": [
+    "Plugin host wrappers use snake_case host_callback_id / stream_id / payload / done.",
+    "pluginapi.HTTPResponse uses StatusCode, Headers, Body (PascalCase) when that type is unmarshaled.",
+    "Go executor stream types use status_code and stream_id."
+  ]
+}

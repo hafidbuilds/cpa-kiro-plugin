@@ -1,0 +1,127 @@
+{
+  "framing": {
+    "byte_order": "big-endian",
+    "layout": [
+      "u32 total_length",
+      "u32 headers_length",
+      "u32 prelude_crc32_ieee of first 8 bytes",
+      "headers",
+      "utf-8 JSON payload",
+      "u32 message_crc32_ieee of all bytes except the last 4"
+    ],
+    "string_header": [
+      "u8 name_len",
+      "name",
+      "u8 type=7",
+      "u16 value_len",
+      "value"
+    ],
+    "required_headers": [":message-type", ":event-type"],
+    "max_frame_bytes": 16777216,
+    "split_feed": "A 7-byte prefix must buffer; the remainder completes one event."
+  },
+  "frames": [
+    {
+      "name": "assistant_hello",
+      "message_type": "event",
+      "event_type": "assistantResponseEvent",
+      "payload": { "content": "hello" },
+      "hex": "0000005e0000003b530a47e70d3a6d6573736167652d747970650700056576656e740b3a6576656e742d74797065070016617373697374616e74526573706f6e73654576656e747b22636f6e74656e74223a2268656c6c6f227d70619fc2"
+    },
+    {
+      "name": "assistant_391_with_usage",
+      "message_type": "event",
+      "event_type": "assistantResponseEvent",
+      "payload": {
+        "content": "391",
+        "usage": { "inputTokens": 12, "outputTokens": 1 }
+      },
+      "hex": "000000880000003b55bfcd1e0d3a6d6573736167652d747970650700056576656e740b3a6576656e742d74797065070016617373697374616e74526573706f6e73654576656e747b22636f6e74656e74223a22333931222c227573616765223a7b22696e707574546f6b656e73223a31322c226f7574707574546f6b656e73223a317d7dfcf07925"
+    },
+    {
+      "name": "assistant_world",
+      "message_type": "event",
+      "event_type": "assistantResponseEvent",
+      "payload": { "content": " world" },
+      "hex": "0000005f0000003b6e6a6e570d3a6d6573736167652d747970650700056576656e740b3a6576656e742d74797065070016617373697374616e74526573706f6e73654576656e747b22636f6e74656e74223a2220776f726c64227d11d05657"
+    },
+    {
+      "name": "metadata_end_turn",
+      "message_type": "event",
+      "event_type": "metadataEvent",
+      "payload": { "stopReason": "end_turn" },
+      "hex": "0000005b00000032e23670330d3a6d6573736167652d747970650700056576656e740b3a6576656e742d7479706507000d6d657461646174614576656e747b2273746f70526561736f6e223a22656e645f7475726e227d0789a596"
+    },
+    {
+      "name": "reasoning_think",
+      "message_type": "event",
+      "event_type": "reasoningContentEvent",
+      "payload": { "text": "Think" },
+      "hex": "0000005a0000003ad18dd1b10d3a6d6573736167652d747970650700056576656e740b3a6576656e742d74797065070015726561736f6e696e67436f6e74656e744576656e747b2274657874223a225468696e6b227d9a7ff05b",
+      "notes": "Unsigned reasoning is omitted from Claude content and added to hidden output tokens."
+    },
+    {
+      "name": "context_usage",
+      "message_type": "event",
+      "event_type": "contextUsageEvent",
+      "payload": { "contextUsagePercentage": 10.5 },
+      "hex": "0000006500000036fb4ab2cd0d3a6d6573736167652d747970650700056576656e740b3a6576656e742d74797065070011636f6e7465787455736167654576656e747b22636f6e74657874557361676550657263656e74616765223a31302e357d1765280c",
+      "notes": "10.5% of a 200000-token window becomes 21000 input tokens when usage is omitted."
+    },
+    {
+      "name": "tool_use_fragment",
+      "message_type": "event",
+      "event_type": "toolUseEvent",
+      "payload": { "name": "lookup", "input": "{\"q\":" },
+      "hex": "0000006400000031584e0ede0d3a6d6573736167652d747970650700056576656e740b3a6576656e742d7479706507000c746f6f6c5573654576656e747b226e616d65223a226c6f6f6b7570222c22696e707574223a227b5c22715c223a227d30a43c35"
+    },
+    {
+      "name": "tool_use_complete",
+      "message_type": "event",
+      "event_type": "toolUseEvent",
+      "payload": {
+        "toolUseId": "toolu_real",
+        "name": "lookup",
+        "input": "\"x\"}",
+        "stop": true
+      },
+      "hex": "0000008800000031b56a24000d3a6d6573736167652d747970650700056576656e740b3a6576656e742d7479706507000c746f6f6c5573654576656e747b22746f6f6c5573654964223a22746f6f6c755f7265616c222c226e616d65223a226c6f6f6b7570222c22696e707574223a225c22785c227d222c2273746f70223a747275657db37e5f1a",
+      "assembled_tool": { "toolUseId": "toolu_real", "name": "lookup", "input": { "q": "x" } }
+    },
+    {
+      "name": "exception",
+      "message_type": "exception",
+      "event_type": "modelStreamErrorException",
+      "payload": { "message": "model unavailable" },
+      "hex": "0000007100000042394236aa0d3a6d6573736167652d74797065070009657863657074696f6e0b3a6576656e742d747970650700196d6f64656c53747265616d4572726f72457863657074696f6e7b226d657373616765223a226d6f64656c20756e617661696c61626c65227d093447b9",
+      "decoder_error": "Kiro upstream stream error: model unavailable"
+    },
+    {
+      "name": "error_without_event_type",
+      "message_type": "error",
+      "payload": { "errorMessage": "internal failure" },
+      "hex": "0000004900000016c41550000d3a6d6573736167652d747970650700056572726f727b226572726f724d657373616765223a22696e7465726e616c206661696c757265227d19dbba34",
+      "decoder_error": "Kiro upstream stream error: internal failure"
+    }
+  ],
+  "execute_fixture_concat_hex": [
+    "assistant_391_with_usage",
+    "metadata_end_turn"
+  ],
+  "nested_usage": {
+    "accepted": {
+      "metrics": {
+        "usage": {
+          "uncachedInputTokens": "5",
+          "cacheReadInputTokens": 4.0,
+          "cacheWriteInputTokens": 3.0,
+          "totalOutputTokens": 2.0
+        }
+      }
+    },
+    "accepted_totals": { "input_tokens": 12, "output_tokens": 2 },
+    "ignored_tool_input_usage": {
+      "input": { "usage": { "inputTokens": 100000.0, "outputTokens": 100000.0 } }
+    }
+  }
+}

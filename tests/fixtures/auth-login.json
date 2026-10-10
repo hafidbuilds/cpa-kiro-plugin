@@ -1,0 +1,110 @@
+{
+  "login_start": {
+    "method": "auth.login.start",
+    "request_builder_id": {
+      "Provider": "kiro",
+      "Metadata": { "method": "builder-id" },
+      "host_callback_id": "cb-start"
+    },
+    "request_idc": {
+      "Provider": "kiro",
+      "Metadata": {
+        "method": "idc",
+        "region": "us-east-1",
+        "start_url": "https://example.awsapps.com/start"
+      },
+      "host_callback_id": "cb-start"
+    },
+    "oidc_register_url": "https://oidc.us-east-1.amazonaws.com/client/register",
+    "oidc_register_body": {
+      "clientName": "Kiro CLI",
+      "clientType": "public",
+      "scopes": [
+        "codewhisperer:completions",
+        "codewhisperer:analysis",
+        "codewhisperer:conversations",
+        "codewhisperer:transformations",
+        "codewhisperer:taskassist"
+      ],
+      "grantTypes": [
+        "urn:ietf:params:oauth:grant-type:device_code",
+        "refresh_token"
+      ]
+    },
+    "device_authorization_url": "https://oidc.us-east-1.amazonaws.com/device_authorization",
+    "device_authorization_body": {
+      "clientId": "REDACTED_CLIENT_ID",
+      "clientSecret": "REDACTED_CLIENT_SECRET",
+      "startUrl": "https://view.awsapps.com/start"
+    },
+    "response": {
+      "ok": true,
+      "result": {
+        "Provider": "kiro",
+        "URL": "https://device.sso.example/?user_code=ABCD-EFGH",
+        "State": "kiro-TESTSTATE",
+        "ExpiresAt": "2026-10-10T00:10:00Z",
+        "Metadata": { "flow": "device", "user_code": "ABCD-EFGH" }
+      }
+    }
+  },
+  "login_poll": {
+    "method": "auth.login.poll",
+    "request": {
+      "Provider": "kiro",
+      "State": "kiro-TESTSTATE",
+      "host_callback_id": "cb-poll"
+    },
+    "pending": {
+      "ok": true,
+      "result": { "Status": "pending" }
+    },
+    "success_builder_id": {
+      "ok": true,
+      "result": {
+        "Status": "success",
+        "Auth": {
+          "Provider": "kiro",
+          "ID": "kiro-idc-e1db7eab4e13.json",
+          "FileName": "kiro-idc-e1db7eab4e13.json",
+          "Label": "kiro-idc-e1db7eab4e13",
+          "Metadata": {
+            "type": "kiro",
+            "auth_kind": "oauth",
+            "auth_method": "idc",
+            "region": "us-east-1",
+            "access_token": "REDACTED_ACCESS_TOKEN",
+            "refresh_token": "REDACTED_REFRESH_TOKEN",
+            "expired": "2026-10-10T01:00:00Z",
+            "profile_arn": "arn:aws:codewhisperer:us-east-1:638616132270:profile/AAAACCCCXXXX"
+          },
+          "StorageJSON_object": {
+            "type": "kiro",
+            "auth_method": "idc",
+            "region": "us-east-1",
+            "profile_arn": "arn:aws:codewhisperer:us-east-1:638616132270:profile/AAAACCCCXXXX",
+            "access_token": "REDACTED_ACCESS_TOKEN",
+            "refresh_token": "REDACTED_REFRESH_TOKEN",
+            "expired": "2026-10-10T01:00:00Z",
+            "client_id": "REDACTED_CLIENT_ID",
+            "client_secret": "REDACTED_CLIENT_SECRET",
+            "start_url": "https://view.awsapps.com/start"
+          }
+        }
+      }
+    },
+    "error_unknown_state": {
+      "ok": true,
+      "result": {
+        "Status": "error",
+        "Message": "Kiro login session expired or is unknown; start a new login"
+      }
+    }
+  },
+  "notes": [
+    "Builder ID uses start URL https://view.awsapps.com/start and the fixed profile ARN above.",
+    "IDC login requires https start_url and a valid region; it then calls List-Available-Profiles.",
+    "authorization_pending and slow_down stay Status=pending.",
+    "State must stay opaque: never embed deviceCode or clientSecret."
+  ]
+}

@@ -4,4 +4,5 @@
 *.h
 .env
 .DS_Store
+/target/
 cpa-kiro-plugin
