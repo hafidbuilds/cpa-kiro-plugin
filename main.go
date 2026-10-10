@@ -69,10 +69,26 @@ import (
 
 const pluginIdentifier = "kiro"
 
+type pluginError struct {
+	Code             string `json:"code"`
+	Message          string `json:"message"`
+	Retryable        bool   `json:"retryable,omitempty"`
+	HTTPStatus       int    `json:"http_status,omitempty"`
+	RetryAfterMS     int64  `json:"retry_after_ms,omitempty"`
+	CredentialScoped bool   `json:"credential_scoped,omitempty"`
+}
+
+func (e *pluginError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return e.Code + ": " + e.Message
+}
+
 type envelope struct {
-	OK     bool             `json:"ok"`
-	Result json.RawMessage  `json:"result,omitempty"`
-	Error  *pluginabi.Error `json:"error,omitempty"`
+	OK     bool            `json:"ok"`
+	Result json.RawMessage `json:"result,omitempty"`
+	Error  *pluginError    `json:"error,omitempty"`
 }
 
 type lifecycleRequest struct {
@@ -343,7 +359,7 @@ func okEnvelope(value any) ([]byte, error) {
 }
 
 func errorEnvelope(code, message string, status int, retryable bool) []byte {
-	raw, _ := json.Marshal(envelope{OK: false, Error: &pluginabi.Error{
+	raw, _ := json.Marshal(envelope{OK: false, Error: &pluginError{
 		Code:       code,
 		Message:    message,
 		HTTPStatus: status,

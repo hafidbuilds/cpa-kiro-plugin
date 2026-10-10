@@ -77,7 +77,7 @@ func executorRequestRaw(t *testing.T, streamID string) []byte {
 	return raw
 }
 
-func pluginErrorFrom(t *testing.T, raw []byte) *pluginabi.Error {
+func pluginErrorFrom(t *testing.T, raw []byte) *pluginError {
 	t.Helper()
 	var env envelope
 	if errUnmarshal := json.Unmarshal(raw, &env); errUnmarshal != nil {

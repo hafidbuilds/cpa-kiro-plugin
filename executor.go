@@ -467,7 +467,7 @@ func upstreamErrorEnvelope(status int, errValue error) []byte {
 	case status == http.StatusPaymentRequired:
 		code = "billing_required"
 	}
-	pluginErr := &pluginabi.Error{
+	pluginErr := &pluginError{
 		Code:       code,
 		Message:    errValue.Error(),
 		HTTPStatus: status,

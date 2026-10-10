@@ -4,64 +4,32 @@ This repository builds a Kiro provider plugin for [CLIProxyAPI](https://github.c
 
 Use OAuth for interactive sign-in. Use a Kiro API key for non-interactive setups.
 
-## Understand the two repositories
+## Install the plugin
 
-CLIProxyAPI loads compiled plugin libraries. It does not load Go source files from its `plugins` directory.
+Install CLIProxyAPI before you install this plugin. CLIProxyAPI loads the plugin as a compiled library from its `plugins.dir` directory.
 
-Keep the repositories beside each other:
-
-```text
-parent-directory/
-├── CLIProxyAPI/
-│   └── plugins/
-└── cpa-kiro-plugin/
-```
-
-This repository contains the plugin source. CLIProxyAPI loads the compiled library from its `plugins` directory. The `replace` directive in `go.mod` expects the repositories to be siblings:
-
-```go
-replace github.com/router-for-me/CLIProxyAPI/v8 => ../CLIProxyAPI
-```
-
-If you installed CLIProxyAPI with Homebrew, you can still use this plugin. Build the library into the directory set by `plugins.dir` in your CLIProxyAPI config.
-
-## Prepare the repositories
-
-You need:
-
-- a CLIProxyAPI source checkout if you build the plugin;
-- Go 1.26 or later;
-- a Kiro account, or a Kiro API key for non-interactive use; and
-- a client key for CLIProxyAPI, such as `local-dev-key`.
-
-If CLIProxyAPI runs in Podman, build the plugin for the container's operating system and architecture.
-
-## Build the plugin
-
-Run this command from the plugin repository. It writes the library into the sibling CLIProxyAPI checkout:
+Clone this repository anywhere:
 
 ```bash
-plugin_os="$(go env GOOS)"
-plugin_arch="$(go env GOARCH)"
-
-case "$plugin_os" in
-  darwin) plugin_ext="dylib" ;;
-  windows) plugin_ext="dll" ;;
-  *) plugin_ext="so" ;;
-esac
-
-plugin_dir="../CLIProxyAPI/plugins/$plugin_os/$plugin_arch"
-mkdir -p "$plugin_dir"
-
-CGO_ENABLED=1 go build -buildmode=c-shared \
-  -o "$plugin_dir/kiro-go.$plugin_ext" .
-
-rm -f "$plugin_dir/kiro-go.h"
+git clone https://github.com/hafidbuilds/cpa-kiro-plugin.git
+cd cpa-kiro-plugin
 ```
 
-Build for the operating system and architecture where CLIProxyAPI runs. The library name `kiro-go.dylib`, `kiro-go.so`, or `kiro-go.dll` gives the plugin its ID: `kiro-go`.
+You need Go 1.26 or later to build the plugin. The build uses the released CLIProxyAPI SDK, so you do not need a CLIProxyAPI source checkout.
 
-For a Homebrew installation, set `plugin_dir` to the directory in your CLIProxyAPI config instead of `../CLIProxyAPI/plugins/...`.
+Build the plugin:
+
+```bash
+./build.sh
+```
+
+By default, `build.sh` writes the library to `plugins/<goos>/<goarch>/kiro-go.<extension>`. If your CLIProxyAPI config uses another plugin directory, set `CPA_PLUGIN_DIR`:
+
+```bash
+CPA_PLUGIN_DIR=/path/to/plugins ./build.sh
+```
+
+Build for the operating system and architecture where CLIProxyAPI runs. If CLIProxyAPI runs in Podman, build the plugin inside a matching Linux container.
 
 ## Configure CLIProxyAPI
 
@@ -82,6 +50,8 @@ plugins:
       models:
         - "*"
 ```
+
+Set `plugins.dir` to the same directory that you pass to `CPA_PLUGIN_DIR`. With `dir: "plugins"`, run CLIProxyAPI from this repository or use an absolute plugin path.
 
 `access.api-keys` authenticates Claude Code, Codex CLI, and other clients to CLIProxyAPI. It is separate from the Kiro credential.
 
