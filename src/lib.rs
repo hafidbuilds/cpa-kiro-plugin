@@ -20,6 +20,8 @@ pub mod kiro_executor;
 mod kiro_login;
 #[path = "kiro-models.rs"]
 pub mod kiro_models;
+#[path = "kiro-pacing.rs"]
+mod kiro_pacing;
 #[path = "kiro-request-transform.rs"]
 pub mod kiro_request_transform;
 

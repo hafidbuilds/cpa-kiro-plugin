@@ -264,34 +264,16 @@ fn classify_kiro_upstream_error(
         let now = kiro_upstream_now();
         failure.status = 429;
         failure.credential_scoped = true;
-        failure.retry_after_ms = (next_month_start(now) - now).whole_milliseconds() as i64;
+        // Re-checked daily like the plugin-side bench, so added credits or an
+        // upgrade are picked up without a month-long lockout.
+        failure.retry_after_ms =
+            crate::kiro_pacing::until_next_utc_midnight(now).as_millis() as i64;
     } else if status == 403 && is_invalid_bearer_token(body) {
         failure.status = 401;
     } else if status == 429 {
         failure.retry_after_ms = retry_after_from_headers(headers);
     }
     failure
-}
-
-fn next_month_start(now: OffsetDateTime) -> OffsetDateTime {
-    let date = now.date();
-    let (year, month) = match date.month() {
-        Month::January => (date.year(), Month::February),
-        Month::February => (date.year(), Month::March),
-        Month::March => (date.year(), Month::April),
-        Month::April => (date.year(), Month::May),
-        Month::May => (date.year(), Month::June),
-        Month::June => (date.year(), Month::July),
-        Month::July => (date.year(), Month::August),
-        Month::August => (date.year(), Month::September),
-        Month::September => (date.year(), Month::October),
-        Month::October => (date.year(), Month::November),
-        Month::November => (date.year(), Month::December),
-        Month::December => (date.year() + 1, Month::January),
-    };
-    Date::from_calendar_date(year, month, 1)
-        .map(|start| start.with_time(Time::MIDNIGHT).assume_utc())
-        .unwrap_or(now)
 }
 
 fn extract_reason_code(body: &[u8]) -> String {
@@ -447,7 +429,16 @@ fn upstream_error_envelope(failure: &KiroExecutorFailure) -> Vec<u8> {
     if status == 0 {
         status = 502;
     }
-    let code = if failure.classified && failure.reason == REASON_MONTHLY_REQUEST_COUNT {
+    let code = if failure.classified && failure.reason == crate::kiro_pacing::REASON_PACED {
+        // CPA cools only this model briefly and fails over, without the
+        // credential-wide 429 backoff ladder.
+        "transient_rate_limit"
+    } else if failure.classified && failure.reason == crate::kiro_pacing::REASON_BENCHED_SUSPENDED {
+        "account_suspended"
+    } else if failure.classified
+        && (failure.reason == REASON_MONTHLY_REQUEST_COUNT
+            || failure.reason == crate::kiro_pacing::REASON_BENCHED_MONTHLY)
+    {
         "quota_exhausted"
     } else if status == 401 || status == 403 {
         "invalid_auth"
@@ -636,7 +627,7 @@ mod tests {
     use time::Month;
 
     use super::{
-        classify_kiro_upstream_error, convert_kiro_events_to_claude_content, next_month_start,
+        classify_kiro_upstream_error, convert_kiro_events_to_claude_content,
         KIRO_UPSTREAM_NOW_OVERRIDE,
     };
     use crate::kiro_event_stream::KiroEvent;
@@ -710,10 +701,8 @@ mod tests {
         assert_eq!(failure.status, 429);
         assert!(failure.credential_scoped);
         assert!(!failure.retryable());
-        assert_eq!(
-            failure.retry_after_ms,
-            (next_month_start(now) - now).whole_milliseconds() as i64
-        );
+        // 15:30 UTC -> next UTC midnight is 8h30m away.
+        assert_eq!(failure.retry_after_ms, 30_600_000);
         let envelope: Value =
             serde_json::from_slice(&super::upstream_error_envelope(&failure)).expect("json");
         assert_eq!(envelope["error"]["code"], "quota_exhausted");
@@ -763,7 +752,7 @@ mod tests {
     }
 
     #[test]
-    fn monthly_quota_retry_after_matches_frozen_fixture_clock() {
+    fn monthly_quota_is_rechecked_at_next_utc_midnight() {
         let now = OffsetDateTime::new_utc(
             Date::from_calendar_date(2026, Month::October, 10).expect("date"),
             Time::MIDNIGHT,
@@ -776,7 +765,7 @@ mod tests {
             serde_json::from_slice(&super::upstream_error_envelope(&failure)).expect("json");
         assert_eq!(envelope["error"]["code"], "quota_exhausted");
         assert_eq!(envelope["error"]["http_status"], 429);
-        assert_eq!(envelope["error"]["retry_after_seconds"], 1_900_800);
+        assert_eq!(envelope["error"]["retry_after_seconds"], 86_400);
         assert_eq!(envelope["error"]["credential_scoped"], true);
         assert_eq!(envelope["error"].get("retryable"), None);
     }
@@ -811,17 +800,5 @@ mod tests {
         assert_eq!(envelope["error"]["http_status"], 503);
         assert_eq!(envelope["error"]["retryable"], true);
         assert_eq!(envelope["error"].get("credential_scoped"), None);
-    }
-
-    #[test]
-    fn next_month_start_rolls_over_year() {
-        let now = OffsetDateTime::new_utc(
-            Date::from_calendar_date(2026, Month::December, 31).expect("date"),
-            Time::from_hms(23, 59, 0).expect("time"),
-        );
-        let got = next_month_start(now);
-        assert_eq!(got.year(), 2027);
-        assert_eq!(got.month(), Month::January);
-        assert_eq!(got.day(), 1);
     }
 }

@@ -12,6 +12,9 @@ use crate::kiro_event_stream::{
 use super::*;
 pub(super) struct PreparedKiroUpstream {
     host_callback_id: String,
+    /// CPA auth ID; keys per-credential pacing and benching.
+    auth_id: String,
+    disable_cooling: bool,
     url: String,
     headers: Value,
     body: Vec<u8>,
@@ -296,6 +299,8 @@ pub(super) fn prepare_kiro_upstream_request(
     apply_kiro_auth_headers(&mut headers, &credential, &token);
     Ok(PreparedKiroUpstream {
         host_callback_id: json_str(input, &["host_callback_id", "HostCallbackID"]).to_owned(),
+        auth_id: json_str(input, &["AuthID", "auth_id"]).to_owned(),
+        disable_cooling: credential.disable_cooling,
         url: endpoint,
         headers,
         body,
@@ -334,6 +339,15 @@ pub(super) fn open_kiro_upstream(
     prepared: &PreparedKiroUpstream,
     attempt: u32,
 ) -> Result<OpenedKiroUpstream, KiroExecutorFailure> {
+    crate::kiro_pacing::admit_kiro_credential(&prepared.auth_id, prepared.disable_cooling)
+        .map_err(|refusal| KiroExecutorFailure {
+            status: refusal.status,
+            message: refusal.message,
+            reason: refusal.reason.to_owned(),
+            retry_after_ms: refusal.retry_after.as_millis() as i64,
+            credential_scoped: refusal.credential_scoped,
+            classified: true,
+        })?;
     let mut headers = prepared.headers.clone();
     set_header(
         &mut headers,
@@ -378,6 +392,13 @@ pub(super) fn open_kiro_upstream(
     if status != 200 {
         let body = read_error_body(&stream_id, MAX_ERROR_BODY_BYTES);
         close_host_http_stream(&stream_id);
+        crate::kiro_pacing::record_kiro_upstream_failure(
+            &prepared.auth_id,
+            prepared.disable_cooling,
+            status,
+            &extract_reason_code(&body),
+            &String::from_utf8_lossy(&body),
+        );
         return Err(classify_kiro_upstream_error(
             status,
             response.get("headers").or_else(|| response.get("Headers")),
