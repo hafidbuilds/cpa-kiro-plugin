@@ -59,6 +59,17 @@ pub fn dispatch_method(method: &str, request: &[u8]) -> Result<Vec<u8>, Dispatch
                 code: "executor_error",
                 message,
             }),
+        "quota.identifier" => Ok(ok_envelope(json!({"identifier": "kiro"}))),
+        "quota.describe" => Ok(ok_envelope(json!({
+            "supported_providers": ["kiro"],
+            "display_name": "Kiro"
+        }))),
+        "quota.fetch" => {
+            crate::kiro_account::fetch_kiro_quota(request).map_err(|message| DispatchError {
+                code: "invalid_request",
+                message,
+            })
+        }
         "command_line.register" => Ok(ok_envelope(
             json!({"Flags": [{"Name": "kiro-login", "Usage": "Login to Kiro in a browser", "Type": "bool"}]}),
         )),
@@ -713,14 +724,18 @@ fn plugin_registration() -> Value {
                 {"Name": "models", "Type": "array", "Description": "Allowed Kiro model IDs. Use * to expose every model discovered for an account."},
                 {"Name": "kiro_version", "Type": "string", "Description": "Kiro client version sent in upstream compatibility headers."},
                 {"Name": "node_version", "Type": "string", "Description": "Node.js version sent in upstream compatibility headers."},
-                {"Name": "system_version", "Type": "string", "Description": "Operating-system version sent in upstream compatibility headers."}
+                {"Name": "system_version", "Type": "string", "Description": "Operating-system version sent in upstream compatibility headers."},
+                {"Name": "min_token_interval", "Type": "string", "Description": "Minimum gap between two requests of one Kiro account, e.g. 1s."},
+                {"Name": "max_token_interval", "Type": "string", "Description": "Maximum gap, and the longest a request queues before failing over to another account, e.g. 2s."},
+                {"Name": "suspend_cooldown", "Type": "string", "Description": "How long an account Kiro reports as suspended stays out of rotation, e.g. 1h."}
             ]
         },
         "capabilities": {
             "model_registrar": true, "model_provider": true, "auth_provider": true,
             "executor": true, "executor_model_scope": "both",
             "executor_input_formats": ["claude"], "executor_output_formats": ["claude"],
-            "command_line_plugin": true
+            "command_line_plugin": true,
+            "quota_provider": true
         }
     })
 }

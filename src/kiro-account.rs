@@ -1,10 +1,13 @@
 //! Kiro account usage: the account identity used to name auth files, and the
 //! credit quota reported to CPA's management panel.
 
+use base64::Engine;
 use serde_json::{json, Value};
 
 use crate::dispatch::{host_http_get, profile_list_headers, query_escape, HostHttpError};
-use crate::kiro_credentials::{api_region, candidate_management_regions, KiroCredential};
+use crate::kiro_credentials::{
+    api_region, candidate_management_regions, parse_kiro_credential, KiroCredential,
+};
 
 /// Calls `Get-Usage-Limits` on the Kiro management API, trying each management
 /// region the credential may live in.
@@ -95,6 +98,110 @@ fn apply_kiro_account_identity(credential: &mut KiroCredential, limits: &Value) 
             credential.user_id = user_id;
         }
     }
+}
+
+/// Handles `quota.fetch`: the account's Kiro credits for CPA's management panel.
+///
+/// A rejected token is refreshed once and saved, like the executor does, so
+/// the panel shows quota between scheduled refreshes too.
+pub(crate) fn fetch_kiro_quota(request: &[u8]) -> Result<Vec<u8>, String> {
+    let input: Value = serde_json::from_slice(request)
+        .map_err(|error| format!("decode quota request: {error}"))?;
+    let auth_id = text_field(&input, &["auth_id", "AuthID"]);
+    let auth_path = input
+        .pointer("/attributes/path")
+        .or_else(|| input.pointer("/Attributes/path"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let callback_id = text_field(&input, &["host_callback_id", "HostCallbackID"]);
+    let original_storage = match input
+        .get("storage_json")
+        .or_else(|| input.get("StorageJSON"))
+        .and_then(Value::as_str)
+        .map(|encoded| base64::engine::general_purpose::STANDARD.decode(encoded))
+    {
+        Some(Ok(bytes)) => bytes,
+        _ => {
+            return Ok(quota_error(
+                "invalid_auth",
+                "quota request has no Kiro credential",
+                401,
+                false,
+            ))
+        }
+    };
+    let credential = match parse_kiro_credential(&original_storage) {
+        Ok(Some(credential)) => credential,
+        Ok(None) => {
+            return Ok(quota_error(
+                "invalid_auth",
+                "auth is not a Kiro credential",
+                401,
+                false,
+            ))
+        }
+        Err(error) => return Ok(quota_error("invalid_auth", &error.to_string(), 401, false)),
+    };
+    let credential = crate::kiro_auth_store::current_kiro_credential(auth_id, credential);
+    let limits = match fetch_kiro_usage_limits(callback_id, &credential, false) {
+        Err(error) if error.status == 401 && credential.is_oauth() => {
+            let refreshed = crate::kiro_auth_store::refresh_kiro_credential_once(
+                auth_id,
+                credential,
+                |stale| crate::dispatch::refresh_oauth_credential(&input, stale),
+            );
+            let refreshed = match refreshed {
+                Ok(refreshed) => refreshed,
+                Err(envelope) => return Ok(envelope),
+            };
+            let _ = crate::kiro_auth_store::persist_kiro_credential(
+                auth_id,
+                auth_path,
+                &original_storage,
+                &refreshed,
+            );
+            fetch_kiro_usage_limits(callback_id, &refreshed, false)
+        }
+        other => other,
+    };
+    let limits = match limits {
+        Ok(limits) => limits,
+        Err(error) if error.status == 401 => {
+            return Ok(quota_error(
+                "quota_auth_failed",
+                "Kiro rejected the credential while reading quota; sign in again",
+                401,
+                false,
+            ))
+        }
+        Err(error) => {
+            return Ok(quota_error(
+                "quota_unavailable",
+                &format!("read Kiro usage limits: {}", error.detail),
+                502,
+                true,
+            ))
+        }
+    };
+    match kiro_quota_response(&limits) {
+        Some(response) => Ok(crate::dispatch::ok_envelope(response)),
+        None => Ok(quota_error(
+            "quota_unavailable",
+            "Kiro returned no usage data; try again later",
+            502,
+            true,
+        )),
+    }
+}
+
+fn text_field<'a>(input: &'a Value, keys: &[&str]) -> &'a str {
+    keys.iter()
+        .find_map(|key| input.get(*key).and_then(Value::as_str))
+        .unwrap_or_default()
+}
+
+fn quota_error(code: &str, message: &str, status: i64, retryable: bool) -> Vec<u8> {
+    crate::dispatch::error_envelope(code, message, status, retryable)
 }
 
 /// Kiro keeps used-up or expired free trials and bonuses in the response; like

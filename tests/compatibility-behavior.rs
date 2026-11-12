@@ -130,7 +130,15 @@ fn plugin_register_declares_schema_capabilities_and_claude_formats() {
         .collect();
     assert_eq!(
         fields,
-        ["models", "kiro_version", "node_version", "system_version"]
+        [
+            "models",
+            "kiro_version",
+            "node_version",
+            "system_version",
+            "min_token_interval",
+            "max_token_interval",
+            "suspend_cooldown"
+        ]
     );
 }
 

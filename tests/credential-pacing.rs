@@ -78,6 +78,28 @@ fn handle(method: &str, request: &Value) -> Vec<u8> {
                 "body": base64::engine::general_purpose::STANDARD.encode(body.to_string())
             }))
         }
+        "host.http.do"
+            if request["url"]
+                .as_str()
+                .unwrap_or("")
+                .contains("Get-Usage-Limits") =>
+        {
+            let body = json!({
+                "subscriptionInfo": {"subscriptionTitle": "KIRO STUDENT"},
+                "nextDateReset": 1796083200.0,
+                "userInfo": {"email": "student@example.com", "userId": "user-1"},
+                "usageBreakdownList": [{
+                    "resourceType": "CREDIT",
+                    "displayName": "Credit",
+                    "currentUsageWithPrecision": 0.81,
+                    "usageLimitWithPrecision": 1000.0
+                }]
+            });
+            ok(json!({
+                "status_code": 200,
+                "body": base64::engine::general_purpose::STANDARD.encode(body.to_string())
+            }))
+        }
         "host.auth.save" => {
             fake.saves.push(request.clone());
             ok(json!({"name": request["name"], "path": "/auth"}))
@@ -332,6 +354,34 @@ fn rejected_token_is_refreshed_saved_and_retried_once() {
     let fake = FAKE.lock().expect("fake lock");
     assert_eq!(fake.refreshes, 0);
     assert_eq!(fake.authorizations, ["Bearer fresh-access"]);
+}
+
+#[test]
+fn quota_fetch_reports_account_credits() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    setup("", Vec::new(), b"");
+    let described = call_plugin("quota.describe", &json!({}));
+    assert_eq!(described["result"]["supported_providers"], json!(["kiro"]));
+    let quota = call_plugin(
+        "quota.fetch",
+        &json!({
+            "auth_index": "1",
+            "auth_id": "kiro-quota.json",
+            "provider": "kiro",
+            "storage_json": base64::engine::general_purpose::STANDARD
+                .encode(desktop_storage().to_string())
+        }),
+    );
+    assert_eq!(quota["ok"], true, "{quota}");
+    assert_eq!(quota["result"]["subscription"]["plan"], "KIRO STUDENT");
+    assert_eq!(quota["result"]["summary"][0]["value"], 0.81);
+    assert_eq!(quota["result"]["summary"][1]["value"], 1000.0);
+    assert_eq!(
+        quota["result"]["groups"][0]["buckets"][0]["resetTime"],
+        "2026-12-01T00:00:00Z"
+    );
 }
 
 #[test]
