@@ -70,9 +70,12 @@ pub fn dispatch_method(method: &str, request: &[u8]) -> Result<Vec<u8>, Dispatch
                 message,
             })
         }
-        "command_line.register" => Ok(ok_envelope(
-            json!({"Flags": [{"Name": "kiro-login", "Usage": "Login to Kiro in a browser", "Type": "bool"}]}),
-        )),
+        "command_line.register" => Ok(ok_envelope(json!({"Flags": [
+            {"Name": "kiro-login", "Usage": "Login to Kiro in a browser", "Type": "bool"},
+            {"Name": "kiro-login-method", "Usage": "Kiro login method for -kiro-login: social (Kiro picks), github, google, builder-id, or idc", "Type": "string"},
+            {"Name": "kiro-idc-start-url", "Usage": "IAM Identity Center start URL for -kiro-login-method idc", "Type": "string"},
+            {"Name": "kiro-idc-region", "Usage": "IAM Identity Center region for -kiro-login-method idc", "Type": "string"}
+        ]}))),
         "command_line.execute" => crate::kiro_login::execute_kiro_command_line(request),
         _ => Err(DispatchError {
             code: "unknown_method",

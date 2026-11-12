@@ -154,8 +154,17 @@ pub(crate) fn execute_kiro_command_line(request: &[u8]) -> Result<Vec<u8>, Dispa
         code: "login_failed",
         message: format!("create Kiro auth directory: {error}"),
     })?;
+    let method = command_line_flag(&input, "kiro-login-method")
+        .unwrap_or_else(|| "social".into())
+        .to_ascii_lowercase();
     let start_request = json!({
-        "Provider": KIRO_PLUGIN_IDENTIFIER, "Host": host, "Metadata": {"method": "social"}
+        "Provider": KIRO_PLUGIN_IDENTIFIER,
+        "Host": host,
+        "Metadata": {
+            "method": method,
+            "start_url": command_line_flag(&input, "kiro-idc-start-url").unwrap_or_default(),
+            "region": command_line_flag(&input, "kiro-idc-region").unwrap_or_default()
+        }
     });
     let start_raw =
         start_kiro_login(
@@ -164,9 +173,16 @@ pub(crate) fn execute_kiro_command_line(request: &[u8]) -> Result<Vec<u8>, Dispa
                 message: format!("encode Kiro login request: {error}"),
             })?,
         )?;
-    let start = serde_json::from_slice::<Value>(&start_raw)
-        .ok()
-        .and_then(|response| response.get("result").cloned())
+    let start_envelope = serde_json::from_slice::<Value>(&start_raw).unwrap_or_default();
+    if let Some(message) = start_envelope
+        .pointer("/error/message")
+        .and_then(Value::as_str)
+    {
+        return command_line_error(message);
+    }
+    let start = start_envelope
+        .get("result")
+        .cloned()
         .ok_or_else(|| DispatchError {
             code: "login_failed",
             message: "decode Kiro login start response".into(),
@@ -176,11 +192,34 @@ pub(crate) fn execute_kiro_command_line(request: &[u8]) -> Result<Vec<u8>, Dispa
     if state.is_empty() || login_url.is_empty() {
         return command_line_error("Kiro login did not return a browser URL");
     }
+    let device_flow = start.pointer("/Metadata/flow").and_then(Value::as_str) == Some("device");
     let deadline = Instant::now() + SOCIAL_LOGIN_TTL;
-    let _callback = start_kiro_callback_listener(Path::new(&auth_dir), &state, deadline)?;
-    let mut stdout = format!("Kiro login started.\nLogin URL: {login_url}\n");
+    // Device-code logins (Builder ID, IdC) poll AWS; only browser sign-ins
+    // come back to the local callback.
+    let _callback = if device_flow {
+        None
+    } else {
+        Some(start_kiro_callback_listener(
+            Path::new(&auth_dir),
+            &state,
+            deadline,
+        )?)
+    };
+    let mut stdout = format!("Kiro login started ({method}).\nLogin URL: {login_url}\n");
+    if let Some(code) = start
+        .pointer("/Metadata/user_code")
+        .and_then(Value::as_str)
+        .filter(|code| !code.is_empty())
+    {
+        stdout.push_str(&format!("Confirm this code in the browser: {code}\n"));
+    }
+    // CPA prints a command's stdout only after it returns; show the URL now so
+    // it is visible while the command waits for the browser.
+    eprint!("{stdout}");
     if let Err(error) = open_kiro_login_url(&login_url) {
-        stdout.push_str(&format!("Open the URL above in a browser: {error}\n"));
+        let note = format!("Open the URL above in a browser: {error}\n");
+        eprint!("{note}");
+        stdout.push_str(&note);
     }
     let poll_request = json!({"Provider": KIRO_PLUGIN_IDENTIFIER, "State": state, "Host": host});
     while Instant::now() < deadline {
@@ -228,6 +267,24 @@ pub(crate) fn execute_kiro_command_line(request: &[u8]) -> Result<Vec<u8>, Dispa
         "Stderr": base64::engine::general_purpose::STANDARD.encode(b"Kiro login timed out waiting for the browser callback.\n"),
         "ExitCode": 1
     })))
+}
+
+/// Reads a plugin command-line flag value that the user explicitly set.
+fn command_line_flag(input: &Value, name: &str) -> Option<String> {
+    ["Flags", "flags", "TriggeredFlags", "triggered_flags"]
+        .iter()
+        .filter_map(|key| input.get(*key).and_then(|flags| flags.get(name)))
+        .find(|flag| {
+            flag.get("Set")
+                .or_else(|| flag.get("set"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        })
+        .and_then(|flag| flag.get("Value").or_else(|| flag.get("value")))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
 }
 
 fn command_line_error(message: &str) -> Result<Vec<u8>, DispatchError> {
@@ -1109,6 +1166,33 @@ mod tests {
         let started = Instant::now();
         drop(callback);
         assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn login_method_flag_is_passed_to_login_start() {
+        use base64::Engine;
+        let auth_dir = std::env::temp_dir().join(format!("kiro-cli-test-{}", std::process::id()));
+        let request = serde_json::json!({
+            "Host": {"AuthDir": auth_dir.to_string_lossy()},
+            "TriggeredFlags": {"kiro-login": {"Name": "kiro-login", "Value": "true", "Set": true}},
+            "Flags": {
+                "kiro-login": {"Name": "kiro-login", "Value": "true", "Set": true},
+                "kiro-login-method": {"Name": "kiro-login-method", "Value": " Bogus ", "Set": true}
+            }
+        });
+        let response = super::execute_kiro_command_line(request.to_string().as_bytes())
+            .expect("command line response");
+        let response: serde_json::Value = serde_json::from_slice(&response).expect("JSON");
+        assert_eq!(response["result"]["ExitCode"], 1);
+        let stderr = base64::engine::general_purpose::STANDARD
+            .decode(response["result"]["Stderr"].as_str().expect("stderr"))
+            .expect("base64");
+        let stderr = String::from_utf8(stderr).expect("utf-8");
+        assert!(
+            stderr.contains("unsupported Kiro login method \"bogus\""),
+            "{stderr}"
+        );
+        let _ = std::fs::remove_dir_all(&auth_dir);
     }
 
     #[test]

@@ -141,7 +141,10 @@
         "ok": true,
         "result": {
           "Flags": [
-            { "Name": "kiro-login", "Usage": "Login to Kiro in a browser", "Type": "bool" }
+            { "Name": "kiro-login", "Usage": "Login to Kiro in a browser", "Type": "bool" },
+            { "Name": "kiro-login-method", "Usage": "Kiro login method for -kiro-login: social (Kiro picks), github, google, builder-id, or idc", "Type": "string" },
+            { "Name": "kiro-idc-start-url", "Usage": "IAM Identity Center start URL for -kiro-login-method idc", "Type": "string" },
+            { "Name": "kiro-idc-region", "Usage": "IAM Identity Center region for -kiro-login-method idc", "Type": "string" }
           ]
         }
       }
