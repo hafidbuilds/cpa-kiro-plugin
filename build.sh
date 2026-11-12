@@ -42,5 +42,7 @@ if [ ! -f "$library" ]; then
   exit 1
 fi
 
-cp "$library" "$output"
+# Copy then rename, so a running CPA never maps a half-written library.
+cp "$library" "$output.tmp.$$"
+mv -f "$output.tmp.$$" "$output"
 printf 'Built %s\n' "$output"

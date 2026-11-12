@@ -205,22 +205,21 @@ pub(crate) fn execute_kiro_command_line(request: &[u8]) -> Result<Vec<u8>, Dispa
             deadline,
         )?)
     };
-    let mut stdout = format!("Kiro login started ({method}).\nLogin URL: {login_url}\n");
+    let mut instructions = format!("Kiro login started ({method}).\nLogin URL: {login_url}\n");
     if let Some(code) = start
         .pointer("/Metadata/user_code")
         .and_then(Value::as_str)
         .filter(|code| !code.is_empty())
     {
-        stdout.push_str(&format!("Confirm this code in the browser: {code}\n"));
+        instructions.push_str(&format!("Confirm this code in the browser: {code}\n"));
     }
-    // CPA prints a command's stdout only after it returns; show the URL now so
-    // it is visible while the command waits for the browser.
-    eprint!("{stdout}");
     if let Err(error) = open_kiro_login_url(&login_url) {
-        let note = format!("Open the URL above in a browser: {error}\n");
-        eprint!("{note}");
-        stdout.push_str(&note);
+        instructions.push_str(&format!("Open the URL above in a browser: {error}\n"));
     }
+    // CPA prints a command's stdout only after it returns, so the URL goes to
+    // stderr now, while the command waits for the browser, and is not repeated
+    // in the returned stdout.
+    eprint!("{instructions}");
     let poll_request = json!({"Provider": KIRO_PLUGIN_IDENTIFIER, "State": state, "Host": host});
     while Instant::now() < deadline {
         let poll_raw = poll_kiro_login(&serde_json::to_vec(&poll_request).map_err(|error| {
@@ -244,7 +243,7 @@ pub(crate) fn execute_kiro_command_line(request: &[u8]) -> Result<Vec<u8>, Dispa
                     return command_line_error("Kiro login succeeded without credentials");
                 };
                 return Ok(ok_envelope(json!({
-                    "Stdout": base64::engine::general_purpose::STANDARD.encode(stdout.as_bytes()),
+                    "Stdout": base64::engine::general_purpose::STANDARD.encode([]),
                     "Stderr": base64::engine::general_purpose::STANDARD.encode([]),
                     "Auths": [auth],
                     "ExitCode": 0
@@ -255,7 +254,7 @@ pub(crate) fn execute_kiro_command_line(request: &[u8]) -> Result<Vec<u8>, Dispa
                 let message = json_string(&result, &["Message", "message"])
                     .unwrap_or_else(|| "Kiro login failed".into());
                 return Ok(ok_envelope(json!({
-                    "Stdout": base64::engine::general_purpose::STANDARD.encode(stdout.as_bytes()),
+                    "Stdout": base64::engine::general_purpose::STANDARD.encode([]),
                     "Stderr": base64::engine::general_purpose::STANDARD.encode(format!("{message}\n").as_bytes()),
                     "ExitCode": 1
                 })));
@@ -263,7 +262,7 @@ pub(crate) fn execute_kiro_command_line(request: &[u8]) -> Result<Vec<u8>, Dispa
         }
     }
     Ok(ok_envelope(json!({
-        "Stdout": base64::engine::general_purpose::STANDARD.encode(stdout.as_bytes()),
+        "Stdout": base64::engine::general_purpose::STANDARD.encode([]),
         "Stderr": base64::engine::general_purpose::STANDARD.encode(b"Kiro login timed out waiting for the browser callback.\n"),
         "ExitCode": 1
     })))
