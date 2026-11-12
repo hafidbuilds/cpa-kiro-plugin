@@ -57,6 +57,34 @@ Use exact model IDs instead of `"*"` to disable account model discovery:
 
 Restart CLIProxyAPI after you add or rebuild the plugin.
 
+### Multiple accounts and pacing
+
+Kiro throttles bursts on one account with `USER_REQUEST_RATE_EXCEEDED`, even
+when CPA rotates between accounts. When several coding agents share the
+gateway, the plugin spaces requests per account. A request that would wait
+longer than `max_token_interval` is refused with a short 429, so CPA moves it
+to another account:
+
+```yaml
+    kiro-go:
+      enabled: true
+      min_token_interval: 1s   # minimum gap between two requests of one account
+      max_token_interval: 2s   # upper bound of the gap and of the queue wait
+      suspend_cooldown: 1h     # how long a suspended account stays out of rotation
+```
+
+The plugin also handles these account conditions:
+
+- An account that reports its monthly limit is skipped until the next UTC
+  midnight, then checked again.
+- An account Kiro answers with `403 User is not authorized to make this call`
+  is disabled in its auth file with a note. Re-enable it in the management
+  panel once the block is lifted.
+- When Kiro rejects an access token, the plugin refreshes it once, saves it to
+  the auth file, and retries the request.
+- Set `"disable_cooling": true` in one auth file to opt that account out of
+  pacing and benching.
+
 ## Sign in
 
 Run:
@@ -68,6 +96,10 @@ cliproxyapi --config /path/to/config.yaml --kiro-login
 The command opens Kiro's login page and waits for the callback on
 `127.0.0.1:3128`. Kiro's page provides the available login methods. Keep port
 `3128` free.
+
+The credential is saved as `kiro-<method>-<email>.json`. Signing in to the
+same account again replaces that file; signing in to another account adds a
+new one.
 
 CLIProxyAPI uses two separate credentials:
 
@@ -83,7 +115,19 @@ curl -fsS http://127.0.0.1:8317/v1/models \
   -H "Authorization: Bearer $CLIPROXY_API_KEY"
 ```
 
-Send requests with a model ID from the response.
+Send requests with a model ID from the response. With `models: ["*"]`, each
+account lists the models Kiro offers it.
+
+## Check account quota
+
+The plugin reports each account's Kiro credits to CPA's management API:
+
+```bash
+curl -fsS "http://127.0.0.1:8317/v0/management/plugins/kiro-go/quota?auth_index=<auth-index>" \
+  -H "Authorization: Bearer $CPA_MANAGEMENT_KEY"
+```
+
+Get `auth_index` from `GET /v0/management/auth-files`.
 
 ## Run an end-to-end smoke test
 
@@ -189,6 +233,8 @@ The test needs network access to Kiro.
 
 ## Deferred work
 
+- TODO: sign in from the management panel (a plugin login page). Use
+  `--kiro-login` until then.
 - TODO: load the Linux plugin artifact with a Linux CPA runtime.
 - TODO: add cancellation-driven upstream stream cleanup when CPA exposes a
   cancellation signal in its plugin ABI.
