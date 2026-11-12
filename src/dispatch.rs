@@ -450,15 +450,19 @@ fn refresh_kiro_credential(request: &[u8]) -> Result<Vec<u8>, DispatchError> {
         }
         Err(error) => return Ok(error_envelope("invalid_auth", error.to_string(), 0, false)),
     };
+    let auth_id = json_string(&input, &["AuthID", "auth_id"]).unwrap_or_default();
     let credential = if credential.is_oauth() {
-        match refresh_oauth_credential(&input, credential) {
+        // Shares the per-account coordinator with executor-triggered refreshes,
+        // so CPA's scheduled refresh never spends an already rotated token.
+        match crate::kiro_auth_store::refresh_kiro_credential_once(&auth_id, credential, |stale| {
+            refresh_oauth_credential(&input, stale)
+        }) {
             Ok(credential) => credential,
             Err(error) => return Ok(error),
         }
     } else {
         credential
     };
-    let auth_id = json_string(&input, &["AuthID", "auth_id"]).unwrap_or_default();
     let mut auth = credential
         .host_auth_data(&auth_id, "")
         .map_err(|error| DispatchError {
@@ -474,7 +478,7 @@ fn refresh_kiro_credential(request: &[u8]) -> Result<Vec<u8>, DispatchError> {
     Ok(ok_envelope(json!({"Auth": auth})))
 }
 
-fn refresh_oauth_credential(
+pub(crate) fn refresh_oauth_credential(
     input: &Value,
     mut credential: KiroCredential,
 ) -> Result<KiroCredential, Vec<u8>> {

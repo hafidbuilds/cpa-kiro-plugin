@@ -234,6 +234,12 @@ impl KiroCredential {
         })
     }
 
+    /// Whether the access token's recorded expiry has passed. Unknown expiry
+    /// counts as not expired; Kiro's 401 decides then.
+    pub fn access_token_expired(&self) -> bool {
+        parse_rfc3339(self.expired.as_str()).is_some_and(|expiry| expiry <= SystemTime::now())
+    }
+
     /// Validates and normalizes a decoded credential record.
     pub fn validate(mut self) -> Result<Self, KiroCredentialError> {
         self.credential_type = self.credential_type.trim().to_ascii_lowercase();

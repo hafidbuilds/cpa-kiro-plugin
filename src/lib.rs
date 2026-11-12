@@ -10,6 +10,8 @@ mod config;
 mod dispatch;
 #[path = "kiro-account.rs"]
 mod kiro_account;
+#[path = "kiro-auth-store.rs"]
+mod kiro_auth_store;
 #[path = "kiro-credentials.rs"]
 pub mod kiro_credentials;
 #[path = "kiro-event-stream.rs"]

@@ -43,10 +43,31 @@ pub fn execute_kiro_request(request: &[u8]) -> Result<Vec<u8>, String> {
         Ok(prepared) => prepared,
         Err(error) => return Ok(prepare_request_error_envelope(&error)),
     };
+    let failure = match execute_prepared_kiro_request(&prepared)? {
+        Ok(envelope) => return Ok(envelope),
+        Err(failure) => failure,
+    };
+    if failure.status != 401 {
+        return Ok(upstream_error_envelope(&failure));
+    }
+    match refresh_rejected_kiro_credential(&input, &prepared) {
+        None => Ok(upstream_error_envelope(&failure)),
+        Some(Err(envelope)) => Ok(envelope),
+        Some(Ok(refreshed)) => Ok(match execute_prepared_kiro_request(&refreshed)? {
+            Ok(envelope) => envelope,
+            Err(failure) => upstream_error_envelope(&failure),
+        }),
+    }
+}
+
+/// Runs one prepared request, retrying transport and 5xx failures in place.
+fn execute_prepared_kiro_request(
+    prepared: &PreparedKiroUpstream,
+) -> Result<Result<Vec<u8>, KiroExecutorFailure>, String> {
     let mut last_error: Option<KiroExecutorFailure> = None;
     for attempt in 1..=MAX_UPSTREAM_ATTEMPTS {
         let mut accumulator = new_response_accumulator(&prepared.payload);
-        let (emitted, outcome) = consume_kiro_upstream(&prepared, attempt, |events| {
+        let (emitted, outcome) = consume_kiro_upstream(prepared, attempt, |events| {
             for event in events {
                 accumulator.accept(event)?;
             }
@@ -58,11 +79,11 @@ pub fn execute_kiro_request(request: &[u8]) -> Result<Vec<u8>, String> {
                     let body = accumulator.response_json();
                     let payload = serde_json::to_vec(&body)
                         .map_err(|error| format!("encode Claude response: {error}"))?;
-                    return Ok(ok_executor_envelope(json!({
+                    return Ok(Ok(ok_executor_envelope(json!({
                         "Payload": base64::engine::general_purpose::STANDARD.encode(payload),
                         "Headers": {"Content-Type": ["application/json"]},
                         "Metadata": {"kiro_credits": accumulator.credits}
-                    })));
+                    }))));
                 }
                 Err(error) => last_error = Some(KiroExecutorFailure::from_stream(error)),
             },
@@ -73,12 +94,52 @@ pub fn execute_kiro_request(request: &[u8]) -> Result<Vec<u8>, String> {
             .cloned()
             .unwrap_or_else(KiroExecutorFailure::unknown);
         if emitted || !failure.retry_in_plugin() || attempt == MAX_UPSTREAM_ATTEMPTS {
-            return Ok(upstream_error_envelope(&failure));
+            return Ok(Err(failure));
         }
     }
-    Ok(upstream_error_envelope(
-        &last_error.unwrap_or_else(KiroExecutorFailure::unknown),
-    ))
+    Ok(Err(last_error.unwrap_or_else(KiroExecutorFailure::unknown)))
+}
+
+/// Refreshes a credential whose access token Kiro rejected, writes it back to
+/// its auth file, and rebuilds the request with it.
+///
+/// CPA only cools a 401'd credential down, so without this a single-account
+/// setup stays unusable until the next scheduled refresh. Returns `None` when
+/// the credential cannot be refreshed (API keys, no refresh token).
+fn refresh_rejected_kiro_credential(
+    input: &Value,
+    prepared: &PreparedKiroUpstream,
+) -> Option<Result<PreparedKiroUpstream, Vec<u8>>> {
+    let credential = &prepared.credential;
+    if !credential.is_oauth() || credential.refresh_token.is_empty() {
+        return None;
+    }
+    let auth_id = json_str(input, &["AuthID", "auth_id"]);
+    let refreshed = crate::kiro_auth_store::refresh_kiro_credential_once(
+        auth_id,
+        credential.clone(),
+        |stale| crate::dispatch::refresh_oauth_credential(input, stale),
+    );
+    let refreshed = match refreshed {
+        Ok(refreshed) => refreshed,
+        Err(envelope) => return Some(Err(envelope)),
+    };
+    if let Err(error) = crate::kiro_auth_store::persist_kiro_credential(
+        auth_id,
+        &prepared.auth_path,
+        &prepared.original_storage,
+        &refreshed,
+    ) {
+        log_kiro_warning(
+            json_str(input, &["host_callback_id", "HostCallbackID"]),
+            "Kiro token refreshed but could not be saved; it is kept in memory",
+            &error,
+        );
+    }
+    Some(
+        prepare_kiro_upstream_with(input, refreshed, prepared.original_storage.clone())
+            .map_err(|error| prepare_request_error_envelope(&error)),
+    )
 }
 
 /// Forwards an executor-owned HTTP request through CPA host transport.
@@ -171,35 +232,26 @@ pub fn execute_kiro_stream_request(request: &[u8]) -> Result<Vec<u8>, String> {
             false,
         ));
     }
-    let prepared = match prepare_kiro_upstream_request(&input) {
+    let mut prepared = match prepare_kiro_upstream_request(&input) {
         Ok(prepared) => prepared,
         Err(error) => return Ok(prepare_request_error_envelope(&error)),
     };
-    let mut opened = None;
-    let mut last_error = None;
-    for attempt in 1..=MAX_UPSTREAM_ATTEMPTS {
-        match open_kiro_upstream(&prepared, attempt) {
-            Ok(value) => {
-                opened = Some(value);
-                break;
-            }
-            Err(error) => {
-                let retryable = error.retry_in_plugin();
-                last_error = Some(error);
-                if !retryable || attempt == MAX_UPSTREAM_ATTEMPTS {
-                    return Ok(upstream_error_envelope(
-                        last_error
-                            .as_ref()
-                            .unwrap_or(&KiroExecutorFailure::unknown()),
-                    ));
+    let first = match open_kiro_upstream_with_retries(&prepared) {
+        Ok(first) => first,
+        Err(failure) if failure.status == 401 => {
+            match refresh_rejected_kiro_credential(&input, &prepared) {
+                None => return Ok(upstream_error_envelope(&failure)),
+                Some(Err(envelope)) => return Ok(envelope),
+                Some(Ok(refreshed)) => {
+                    prepared = refreshed;
+                    match open_kiro_upstream_with_retries(&prepared) {
+                        Ok(first) => first,
+                        Err(failure) => return Ok(upstream_error_envelope(&failure)),
+                    }
                 }
             }
         }
-    }
-    let Some(first) = opened else {
-        return Ok(upstream_error_envelope(
-            &last_error.unwrap_or_else(KiroExecutorFailure::unknown),
-        ));
+        Err(failure) => return Ok(upstream_error_envelope(&failure)),
     };
     // CPA drains the output stream only after `executor.execute_stream` returns,
     // and its bridge buffers just 16 chunks. Pumping the upstream body on the
@@ -222,6 +274,26 @@ pub fn execute_kiro_stream_request(request: &[u8]) -> Result<Vec<u8>, String> {
     Ok(ok_executor_envelope(
         json!({"headers": {"Content-Type": ["text/event-stream"]}}),
     ))
+}
+
+/// Opens the upstream stream, retrying transport and 5xx failures in place.
+fn open_kiro_upstream_with_retries(
+    prepared: &PreparedKiroUpstream,
+) -> Result<OpenedKiroUpstream, KiroExecutorFailure> {
+    let mut last_error = KiroExecutorFailure::unknown();
+    for attempt in 1..=MAX_UPSTREAM_ATTEMPTS {
+        match open_kiro_upstream(prepared, attempt) {
+            Ok(opened) => return Ok(opened),
+            Err(error) => {
+                let retry = error.retry_in_plugin();
+                last_error = error;
+                if !retry {
+                    break;
+                }
+            }
+        }
+    }
+    Err(last_error)
 }
 
 /// Forwards one opened Kiro upstream to the CPA output stream, then closes it.

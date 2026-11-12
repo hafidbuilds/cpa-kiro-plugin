@@ -15,6 +15,11 @@ pub(super) struct PreparedKiroUpstream {
     /// CPA auth ID; keys per-credential pacing and benching.
     auth_id: String,
     disable_cooling: bool,
+    /// Auth file path CPA reported, used to write refreshed tokens back.
+    pub(super) auth_path: String,
+    /// The credential JSON as CPA sent it, merged into on write-back.
+    pub(super) original_storage: Vec<u8>,
+    pub(super) credential: KiroCredential,
     url: String,
     headers: Value,
     body: Vec<u8>,
@@ -247,16 +252,29 @@ pub(super) fn new_response_accumulator(payload: &KiroPayload) -> ClaudeResponseA
 pub(super) fn prepare_kiro_upstream_request(
     input: &Value,
 ) -> Result<PreparedKiroUpstream, PrepareKiroError> {
+    let storage = input
+        .get("storage_json")
+        .or_else(|| input.get("StorageJSON"));
+    let original_storage =
+        decode_request_bytes(storage).map_err(PrepareKiroError::InvalidRequest)?;
+    let credential = decode_request_credential(storage)?;
+    let auth_id = json_str(input, &["AuthID", "auth_id"]);
+    let credential = crate::kiro_auth_store::current_kiro_credential(auth_id, credential);
+    prepare_kiro_upstream_with(input, credential, original_storage)
+}
+
+/// Builds the upstream request for an already selected credential, e.g. after
+/// a token refresh.
+pub(super) fn prepare_kiro_upstream_with(
+    input: &Value,
+    credential: KiroCredential,
+    original_storage: Vec<u8>,
+) -> Result<PreparedKiroUpstream, PrepareKiroError> {
     let model = json_str(input, &["model", "Model"]);
     let payload = decode_request_bytes(input.get("payload").or_else(|| input.get("Payload")))
         .map_err(PrepareKiroError::InvalidRequest)?;
     let (mut kiro_payload, _) = translate_claude_request_to_kiro(&payload, model)
         .map_err(|error| PrepareKiroError::InvalidRequest(error.to_string()))?;
-    let credential = decode_request_credential(
-        input
-            .get("storage_json")
-            .or_else(|| input.get("StorageJSON")),
-    )?;
     if credential.is_oauth() && credential.profile_arn.is_empty() {
         return Err(PrepareKiroError::Unavailable(
             "Kiro API key unavailable: OAuth credential has no profile_arn".into(),
@@ -301,6 +319,13 @@ pub(super) fn prepare_kiro_upstream_request(
         host_callback_id: json_str(input, &["host_callback_id", "HostCallbackID"]).to_owned(),
         auth_id: json_str(input, &["AuthID", "auth_id"]).to_owned(),
         disable_cooling: credential.disable_cooling,
+        auth_path: input
+            .pointer("/AuthAttributes/path")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        original_storage,
+        credential: credential.clone(),
         url: endpoint,
         headers,
         body,
@@ -399,6 +424,11 @@ pub(super) fn open_kiro_upstream(
             &extract_reason_code(&body),
             &String::from_utf8_lossy(&body),
         );
+        if status == 403
+            && String::from_utf8_lossy(&body).contains(crate::kiro_pacing::BLOCKED_ACCOUNT_MESSAGE)
+        {
+            disable_blocked_kiro_account(prepared);
+        }
         return Err(classify_kiro_upstream_error(
             status,
             response.get("headers").or_else(|| response.get("Headers")),
@@ -624,4 +654,42 @@ pub(super) fn emit_kiro_stream_frame(stream_id: &str, frame: &[u8]) -> Result<()
             .map_err(|error| error.to_string())?,
     )?;
     Ok(())
+}
+
+/// Disables an account Kiro answers with 403 "User is not authorized to make
+/// this call" and notes why, so the panel shows it instead of failing silently.
+/// The pacing bench already keeps it out of rotation if the write fails.
+fn disable_blocked_kiro_account(prepared: &PreparedKiroUpstream) {
+    if prepared.disable_cooling {
+        return;
+    }
+    let mut credential = prepared.credential.clone();
+    let now = crate::dispatch::format_rfc3339_utc(time::OffsetDateTime::now_utc());
+    if !crate::kiro_auth_store::mark_kiro_account_blocked(&mut credential, &now) {
+        return;
+    }
+    if let Err(error) = crate::kiro_auth_store::persist_kiro_credential(
+        &prepared.auth_id,
+        &prepared.auth_path,
+        &prepared.original_storage,
+        &credential,
+    ) {
+        log_kiro_warning(
+            &prepared.host_callback_id,
+            "Kiro account looks blocked but could not be disabled",
+            &error,
+        );
+    }
+}
+
+pub(super) fn log_kiro_warning(callback_id: &str, message: &str, error: &str) {
+    let payload = json!({
+        "host_callback_id": callback_id,
+        "level": "warn",
+        "message": message,
+        "fields": {"error": error}
+    });
+    if let Ok(raw) = serde_json::to_vec(&payload) {
+        let _ = invoke_host_json("host.log", &raw);
+    }
 }
