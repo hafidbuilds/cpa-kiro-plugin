@@ -32,9 +32,9 @@ static MODEL_DISCOVERY_CACHE: LazyLock<Mutex<HashMap<String, CachedKiroModelResp
 /// Discovers account models and applies cache, fallback, and configured filtering.
 pub fn discover_kiro_models(request: &[u8]) -> Result<Vec<u8>, String> {
     let Some(key) = model_discovery_cache_key(request) else {
-        return Ok(configured_model_fallback_response(
-            "invalid discovery request",
-        ));
+        let error = "invalid discovery request: no recognizable Kiro StorageJSON";
+        log_model_discovery_fallback(request, error);
+        return Ok(configured_model_fallback_response(error));
     };
     if let Ok(cache) = MODEL_DISCOVERY_CACHE.lock() {
         if let Some(entry) = cache.get(&key) {
@@ -77,7 +77,7 @@ fn log_model_discovery_fallback(request: &[u8], error: &str) {
         "level": "warn",
         "message": "Kiro model discovery failed; using cached or configured models",
         "fields": {
-            "auth_id": input.get("auth_id").and_then(Value::as_str).unwrap_or_default(),
+            "auth_id": discovery_auth_id(&input),
             "error": error
         }
     });
@@ -85,9 +85,34 @@ fn log_model_discovery_fallback(request: &[u8], error: &str) {
         let _ = invoke_host_json("host.log", &raw);
     }
 }
+/// CPA's `pluginapi.AuthModelRequest` has no JSON tags, so the host sends Go
+/// field names (`StorageJSON`, `AuthID`). Accept snake_case as well.
+fn discovery_storage(input: &Value) -> Option<&Value> {
+    input
+        .get("StorageJSON")
+        .or_else(|| input.get("storage_json"))
+}
+
+fn discovery_auth_id(input: &Value) -> &str {
+    input
+        .get("AuthID")
+        .or_else(|| input.get("auth_id"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+}
+
+/// Kiro management endpoint for the model catalog. The legacy
+/// `codewhisperer.us-east-1.amazonaws.com/ListAvailableModels` endpoint now
+/// answers 403 FEATURE_NOT_SUPPORTED ("This version of Kiro is no longer supported").
+fn kiro_model_list_url(region: &str) -> String {
+    format!(
+        "https://management.{region}.kiro.dev/List-Available-Models?origin=KIRO_CLI&maxResults=50"
+    )
+}
+
 fn model_discovery_cache_key(request: &[u8]) -> Option<String> {
     let input: Value = serde_json::from_slice(request).ok()?;
-    let storage = input.get("storage_json")?;
+    let storage = discovery_storage(&input)?;
     let raw_storage = if let Some(encoded) = storage.as_str() {
         base64::engine::general_purpose::STANDARD
             .decode(encoded)
@@ -101,10 +126,7 @@ fn model_discovery_cache_key(request: &[u8]) -> Option<String> {
     raw_storage.hash(&mut hasher);
     Some(format!(
         "{}:{}:{}",
-        input
-            .get("auth_id")
-            .and_then(Value::as_str)
-            .unwrap_or_default(),
+        discovery_auth_id(&input),
         credential.runtime_region(),
         hasher.finish()
     ))
@@ -113,9 +135,8 @@ fn model_discovery_cache_key(request: &[u8]) -> Option<String> {
 fn discover_kiro_models_remote(request: &[u8]) -> Result<Vec<u8>, String> {
     let input: Value = serde_json::from_slice(request)
         .map_err(|error| format!("decode Kiro model request: {error}"))?;
-    let storage = input
-        .get("storage_json")
-        .ok_or_else(|| "Kiro model request has no storage_json".to_string())?;
+    let storage = discovery_storage(&input)
+        .ok_or_else(|| "Kiro model request has no StorageJSON".to_string())?;
     let storage = if let Some(encoded) = storage.as_str() {
         base64::engine::general_purpose::STANDARD
             .decode(encoded)
@@ -127,11 +148,6 @@ fn discover_kiro_models_remote(request: &[u8]) -> Result<Vec<u8>, String> {
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "Kiro credential was not recognized".to_string())?;
     let runtime_region = credential.runtime_region();
-    let host = if runtime_region == "us-east-1" {
-        "codewhisperer.us-east-1.amazonaws.com".to_owned()
-    } else {
-        format!("q.{runtime_region}.amazonaws.com")
-    };
     let token = credential
         .bearer_token()
         .map_err(|error| error.to_string())?;
@@ -139,7 +155,7 @@ fn discover_kiro_models_remote(request: &[u8]) -> Result<Vec<u8>, String> {
     let mut seen_tokens = std::collections::HashSet::new();
     let mut models = Vec::new();
     for _ in 0..10 {
-        let mut url = format!("https://{host}/ListAvailableModels?origin=AI_EDITOR&maxResults=50");
+        let mut url = kiro_model_list_url(&runtime_region);
         if !credential.profile_arn.is_empty() {
             url.push_str("&profileArn=");
             url.push_str(&encode_query_value(&credential.profile_arn));
@@ -152,7 +168,7 @@ fn discover_kiro_models_remote(request: &[u8]) -> Result<Vec<u8>, String> {
             "host_callback_id": input.get("host_callback_id").and_then(Value::as_str).unwrap_or_default(),
             "method": "GET",
             "url": url,
-            "headers": {"Authorization": [format!("Bearer {token}")]}
+            "headers": crate::dispatch::profile_list_headers(&token, credential.auth_method)
         });
         let raw = invoke_host_json(
             "host.http.do",
@@ -165,9 +181,6 @@ fn discover_kiro_models_remote(request: &[u8]) -> Result<Vec<u8>, String> {
             .or_else(|| response.get("status_code"))
             .and_then(Value::as_i64)
             .unwrap_or(500);
-        if status != 200 {
-            return Err(format!("Kiro model-list endpoint returned HTTP {status}"));
-        }
         let body = response
             .get("Body")
             .or_else(|| response.get("body"))
@@ -176,6 +189,12 @@ fn discover_kiro_models_remote(request: &[u8]) -> Result<Vec<u8>, String> {
         let body = base64::engine::general_purpose::STANDARD
             .decode(body)
             .map_err(|error| error.to_string())?;
+        if status != 200 {
+            return Err(format!(
+                "Kiro model-list endpoint returned HTTP {status}: {}",
+                crate::dispatch::limited_error_body(&body)
+            ));
+        }
         let listing: Value = serde_json::from_slice(&body)
             .map_err(|error| format!("decode Kiro model-list response: {error}"))?;
         models.extend(
@@ -344,6 +363,23 @@ mod tests {
         let body = if method == "host.http.do" {
             let request: Value = serde_json::from_slice(request).unwrap_or(Value::Null);
             let url = request.get("url").and_then(Value::as_str).unwrap_or("");
+            if !url.starts_with("https://management.us-east-1.kiro.dev/List-Available-Models?")
+                || !url.contains("origin=KIRO_CLI")
+            {
+                // Mirrors the retired legacy endpoint's real answer.
+                let encoded = base64::engine::general_purpose::STANDARD.encode(
+                    r#"{"message":"This version of Kiro is no longer supported.","reason":"FEATURE_NOT_SUPPORTED"}"#,
+                );
+                let body =
+                    serde_json::json!({"ok": true, "result": {"StatusCode": 403, "Body": encoded}});
+                let mut owned = body.to_string().into_bytes().into_boxed_slice();
+                unsafe {
+                    (*response).ptr = owned.as_mut_ptr();
+                    (*response).len = owned.len();
+                }
+                std::mem::forget(owned);
+                return 0;
+            }
             let listing = if url.contains("nextToken=") {
                 serde_json::json!({
                     "models": [
@@ -403,13 +439,17 @@ mod tests {
 
     fn discovered_model_ids(auth_id: &str) -> Vec<String> {
         std::env::set_var("KIRO_TEST_KEY", "REDACTED_API_KEY");
+        // Field names exactly as CPA serializes pluginapi.AuthModelRequest
+        // (no JSON tags; []byte StorageJSON becomes Base64).
+        let storage = serde_json::json!({
+            "type": "kiro",
+            "api_key_env": "KIRO_TEST_KEY",
+            "region": "us-east-1"
+        });
         let request = serde_json::json!({
-            "auth_id": auth_id,
-            "storage_json": {
-                "type": "kiro",
-                "api_key_env": "KIRO_TEST_KEY",
-                "region": "us-east-1"
-            },
+            "AuthID": auth_id,
+            "AuthProvider": "kiro",
+            "StorageJSON": base64::engine::general_purpose::STANDARD.encode(storage.to_string()),
             "host_callback_id": "callback-1"
         });
         let response = discover_kiro_models(request.to_string().as_bytes()).expect("discovery");
