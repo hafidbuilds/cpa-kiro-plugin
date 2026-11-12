@@ -530,27 +530,6 @@ fn remove_header(headers: &mut Value, name: &str) {
     }
 }
 
-fn kiro_machine_id(credential: &KiroCredential, token: &str) -> String {
-    let seed = if credential.is_oauth() {
-        format!(
-            "oauth:{}",
-            first_non_empty(&[&credential.profile_arn, &credential.refresh_token, token])
-        )
-    } else {
-        token.to_owned()
-    };
-    sha256_hex(format!("KiroAPIKey/{seed}").as_bytes())
-}
-
-fn first_non_empty(values: &[&str]) -> String {
-    values
-        .iter()
-        .map(|value| value.trim())
-        .find(|value| !value.is_empty())
-        .unwrap_or_default()
-        .to_owned()
-}
-
 fn is_kiro_runtime_https_url(url: &str, region: &str) -> bool {
     let Some(rest) = url.strip_prefix("https://") else {
         return false;
@@ -567,18 +546,6 @@ fn generate_kiro_executor_uuid() -> String {
         .map_or(0, |duration| duration.as_nanos() as u64);
     let counter = KIRO_EXECUTOR_UUID_COUNTER.fetch_add(1, Ordering::Relaxed);
     format!("{now:016x}-{counter:08x}")
-}
-
-fn sha256_hex(input: &[u8]) -> String {
-    sha256_digest(input)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
-}
-
-fn sha256_digest(input: &[u8]) -> [u8; 32] {
-    use sha2::{Digest, Sha256};
-    Sha256::digest(input).into()
 }
 
 fn decode_request_credential(storage: Option<&Value>) -> Result<KiroCredential, PrepareKiroError> {

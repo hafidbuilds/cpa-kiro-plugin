@@ -765,6 +765,7 @@ pub(crate) fn poll_kiro_login(request: &[u8]) -> Result<Vec<u8>, DispatchError> 
             )))
         }
     }
+    crate::kiro_account::resolve_kiro_account_identity(callback_id, &mut credential);
     let file_name = credential.credential_file_name();
     let auth = credential
         .host_auth_data(&file_name, &file_name)
@@ -907,6 +908,7 @@ fn exchange_social_code(
         credential.profile_arn = discover_profile_arn(callback_id, &credential)
             .map_err(|error| format!("Kiro sign-in succeeded but no profile was found: {error}"))?;
     }
+    crate::kiro_account::resolve_kiro_account_identity(callback_id, &mut credential);
     Ok(credential)
 }
 

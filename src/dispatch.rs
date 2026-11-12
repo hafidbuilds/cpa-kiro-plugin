@@ -192,6 +192,47 @@ pub(super) fn host_http_post(
     Ok(HostHttpResponse { status, body })
 }
 
+/// Sends a GET through CPA's host HTTP transport and returns status and body.
+pub(super) fn host_http_get(
+    callback_id: &str,
+    url: &str,
+    headers: &Map<String, Value>,
+) -> Result<HostHttpResponse, HostHttpError> {
+    let callback_request = json!({
+        "host_callback_id": callback_id,
+        "method": "GET",
+        "url": url,
+        "headers": headers
+    });
+    let raw = invoke_host_json(
+        "host.http.do",
+        &serde_json::to_vec(&callback_request).map_err(|error| HostHttpError {
+            status: 0,
+            detail: format!("encode {} callback: {error}", redact_url(url)),
+        })?,
+    )
+    .map_err(|message| HostHttpError {
+        status: 0,
+        detail: format!("call {}: {message}", redact_url(url)),
+    })?;
+    let response: Value = serde_json::from_slice(&raw).map_err(|error| HostHttpError {
+        status: 0,
+        detail: format!("decode host HTTP response: {error}"),
+    })?;
+    let status = response
+        .get("StatusCode")
+        .or_else(|| response.get("status_code"))
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let body = match response.get("Body").or_else(|| response.get("body")) {
+        Some(Value::String(encoded)) => base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    };
+    Ok(HostHttpResponse { status, body })
+}
+
 pub(super) fn oidc_headers() -> Map<String, Value> {
     let mut headers = oidc_json_headers();
     headers.insert("User-Agent".into(), json!([OIDC_USER_AGENT]));

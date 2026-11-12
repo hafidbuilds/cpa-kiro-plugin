@@ -269,7 +269,7 @@ pub(super) fn prepare_kiro_upstream_request(
         ));
     }
     let config = loaded_kiro_config();
-    let machine = kiro_machine_id(&credential, &token);
+    let machine = credential.machine_id();
     let user_agent = format!(
         "aws-sdk-js/1.0.34 ua/2.1 os/{} lang/js md/nodejs#{} api/codewhispererstreaming#1.0.34 m/E KiroIDE-{}-{}",
         config.system_version, config.node_version, config.kiro_version, machine

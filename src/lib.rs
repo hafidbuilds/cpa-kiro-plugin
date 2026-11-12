@@ -8,6 +8,8 @@
 mod abi;
 mod config;
 mod dispatch;
+#[path = "kiro-account.rs"]
+mod kiro_account;
 #[path = "kiro-credentials.rs"]
 pub mod kiro_credentials;
 #[path = "kiro-event-stream.rs"]

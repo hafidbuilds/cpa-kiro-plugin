@@ -151,6 +151,22 @@ pub struct KiroCredential {
     /// Whether the host should skip this credential.
     #[serde(skip_serializing_if = "is_false")]
     pub disabled: bool,
+    /// Device fingerprint sent to Kiro. Kiro IDE and kiro.rs store a 64-hex or
+    /// UUID value here; when absent one is derived per account.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub machine_id: String,
+    /// Stable Kiro user ID reported by the usage API.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub user_id: String,
+    /// Free-text note shown by the management panel.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub note: String,
+    /// RFC3339 time at which Kiro reported this account as blocked.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub blocked_at: String,
+    /// Opts this credential out of plugin-side pacing and benching.
+    #[serde(skip_serializing_if = "is_false")]
+    pub disable_cooling: bool,
 }
 
 fn is_false(value: &bool) -> bool {
@@ -241,6 +257,9 @@ impl KiroCredential {
         self.label = self.label.trim().to_owned();
         self.prefix = self.prefix.trim().to_owned();
         self.proxy_url = self.proxy_url.trim().to_owned();
+        self.email = self.email.trim().to_owned();
+        self.user_id = self.user_id.trim().to_owned();
+        self.machine_id = self.machine_id.trim().to_owned();
 
         if !is_valid_kiro_region(&self.region) {
             return Err(KiroCredentialError::InvalidRegion(self.region));
@@ -317,12 +336,41 @@ impl KiroCredential {
         Ok(())
     }
 
+    /// Returns the device fingerprint sent in Kiro User-Agent headers.
+    ///
+    /// A stored `machine_id` wins (64 hex, or a UUID doubled to 64 hex, as
+    /// kiro.rs accepts). Otherwise it is derived from the account's own secret
+    /// like kiro.rs, never from the profile ARN: every Google/GitHub account
+    /// shares one placeholder ARN, so an ARN-based ID would make all of them
+    /// look like the same device.
+    pub fn machine_id(&self) -> String {
+        if let Some(id) = normalize_machine_id(&self.machine_id) {
+            return id;
+        }
+        let seed = if self.is_oauth() {
+            format!(
+                "KotlinNativeAPI/{}",
+                first_non_empty(&[&self.refresh_token, &self.access_token])
+            )
+        } else {
+            format!(
+                "KiroAPIKey/{}",
+                first_non_empty(&[&self.api_key, &self.api_key_env])
+            )
+        };
+        hex_encode(&Sha256::digest(seed.as_bytes()))
+    }
+
     /// Returns the stable, non-secret identifier used in labels and auth file names.
+    ///
+    /// The profile ARN is deliberately not used: Google/GitHub accounts share a
+    /// placeholder ARN and IdC profiles are shared by a whole subscription, so
+    /// keying on it would give different accounts the same auth file.
     pub fn fingerprint(&self) -> String {
         let seed = if self.is_oauth() {
             format!(
                 "oauth:{}",
-                first_non_empty(&[&self.profile_arn, &self.email, &self.refresh_token])
+                first_non_empty(&[&self.user_id, &self.email, &self.refresh_token])
             )
         } else if !self.api_key.is_empty() {
             self.api_key.clone()
@@ -333,13 +381,18 @@ impl KiroCredential {
         hex_encode(&digest[..6])
     }
 
-    /// Names the persisted auth file after the method and fingerprint.
+    /// Names the persisted auth file after the method and account.
+    ///
+    /// The account email is used when known, so signing in to the same account
+    /// again overwrites its file instead of adding a duplicate.
     pub fn credential_file_name(&self) -> String {
-        format!(
-            "kiro-{}-{}.json",
-            self.auth_method.as_str(),
+        let account = safe_file_token(&self.email);
+        let account = if account.is_empty() {
             self.fingerprint()
-        )
+        } else {
+            account
+        };
+        format!("kiro-{}-{}.json", self.auth_method.as_str(), account)
     }
 
     /// Builds the host auth record used by parse, login, and refresh responses.
@@ -377,6 +430,9 @@ impl KiroCredential {
             }
             if !self.email.is_empty() {
                 metadata.insert("email".into(), json!(self.email));
+            }
+            if !self.note.is_empty() {
+                metadata.insert("note".into(), json!(self.note));
             }
             if let Some(interval) = self.refresh_interval() {
                 metadata.insert(
@@ -572,6 +628,31 @@ fn first_non_empty(values: &[&str]) -> String {
         .to_owned()
 }
 
+/// Accepts a 64-hex machine ID, or a UUID which is doubled to 64 hex as kiro.rs does.
+fn normalize_machine_id(id: &str) -> Option<String> {
+    let id = id.trim().to_ascii_lowercase();
+    let is_hex = |value: &str| value.bytes().all(|byte| byte.is_ascii_hexdigit());
+    if id.len() == 64 && is_hex(&id) {
+        return Some(id);
+    }
+    let compact = id.replace('-', "");
+    if compact.len() == 32 && is_hex(&compact) {
+        return Some(format!("{compact}{compact}"));
+    }
+    None
+}
+
+/// Keeps only characters CPA accepts in an auth file name.
+fn safe_file_token(value: &str) -> String {
+    let token: String = value
+        .trim()
+        .to_ascii_lowercase()
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric() || "@._+-".contains(*ch))
+        .collect();
+    token.trim_matches('.').to_owned()
+}
+
 fn hex_encode(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);
@@ -704,6 +785,66 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const SOCIAL_PLACEHOLDER_ARN: &str =
+        "arn:aws:codewhisperer:us-east-1:699475941385:profile/EHGA3GRVQMUK";
+
+    fn social_account(refresh_token: &str, email: &str) -> KiroCredential {
+        KiroCredential {
+            credential_type: "kiro".into(),
+            auth_method: KiroAuthMethod::Desktop,
+            region: "us-east-1".into(),
+            profile_arn: SOCIAL_PLACEHOLDER_ARN.into(),
+            refresh_token: refresh_token.into(),
+            access_token: "access".into(),
+            email: email.into(),
+            ..KiroCredential::default()
+        }
+    }
+
+    #[test]
+    fn social_accounts_sharing_placeholder_arn_get_distinct_identity() {
+        let first = social_account("refresh-a", "");
+        let second = social_account("refresh-b", "");
+        assert_ne!(first.machine_id(), second.machine_id());
+        assert_ne!(first.credential_file_name(), second.credential_file_name());
+        assert_eq!(first.machine_id().len(), 64);
+    }
+
+    #[test]
+    fn machine_id_matches_kiro_rs_derivation_and_honors_stored_value() {
+        let credential = social_account("refresh-a", "");
+        let expected = hex_encode(&Sha256::digest(b"KotlinNativeAPI/refresh-a"));
+        assert_eq!(credential.machine_id(), expected);
+
+        let stored = KiroCredential {
+            machine_id: "0123456789ABCDEF0123456789abcdef".into(),
+            ..credential.clone()
+        };
+        assert_eq!(
+            stored.machine_id(),
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        );
+        let invalid = KiroCredential {
+            machine_id: "not-a-machine-id".into(),
+            ..credential
+        };
+        assert_eq!(invalid.machine_id(), expected);
+    }
+
+    #[test]
+    fn credential_file_is_named_after_account_email() {
+        let credential = social_account("refresh-a", " User.Name+kiro@Example.com ");
+        assert_eq!(
+            credential.credential_file_name(),
+            "kiro-desktop-user.name+kiro@example.com.json"
+        );
+        let relogin = social_account("refresh-rotated", "user.name+kiro@example.com");
+        assert_eq!(
+            relogin.credential_file_name(),
+            credential.credential_file_name()
+        );
+    }
 
     #[test]
     fn api_key_records_are_classified_as_api_key() {

@@ -25,9 +25,9 @@ impl Default for KiroPluginConfig {
         Self {
             enabled: true,
             models: vec!["claude-sonnet-4.5".into(), "claude-haiku-4.5".into()],
-            kiro_version: "0.11.107".into(),
+            kiro_version: "1.4.5".into(),
             node_version: "22.22.0".into(),
-            system_version: "linux#6.6.87".into(),
+            system_version: "darwin#24.6.0".into(),
         }
     }
 }
@@ -59,9 +59,9 @@ pub fn configure_kiro_plugin(request: &[u8]) -> Result<(), String> {
             .map_err(|error| format!("decode Kiro plugin YAML: {error}"))?;
         config = yaml;
     }
-    config.kiro_version = non_empty_or_default(&config.kiro_version, "0.11.107");
+    config.kiro_version = non_empty_or_default(&config.kiro_version, "1.4.5");
     config.node_version = non_empty_or_default(&config.node_version, "22.22.0");
-    config.system_version = non_empty_or_default(&config.system_version, "linux#6.6.87");
+    config.system_version = non_empty_or_default(&config.system_version, "darwin#24.6.0");
     config.models = normalize_kiro_model_ids(&config.models);
     if config.models.is_empty() {
         config.models = KiroPluginConfig::default().models;
