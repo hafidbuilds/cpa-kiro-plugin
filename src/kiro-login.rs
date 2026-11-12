@@ -18,7 +18,8 @@ use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::Path;
 use std::process::Command;
-use std::sync::{LazyLock, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 use time::{Duration as TimeDuration, OffsetDateTime};
@@ -175,13 +176,13 @@ pub(crate) fn execute_kiro_command_line(request: &[u8]) -> Result<Vec<u8>, Dispa
     if state.is_empty() || login_url.is_empty() {
         return command_line_error("Kiro login did not return a browser URL");
     }
-    let callback = start_kiro_callback_listener(Path::new(&auth_dir), &state)?;
+    let deadline = Instant::now() + SOCIAL_LOGIN_TTL;
+    let _callback = start_kiro_callback_listener(Path::new(&auth_dir), &state, deadline)?;
     let mut stdout = format!("Kiro login started.\nLogin URL: {login_url}\n");
     if let Err(error) = open_kiro_login_url(&login_url) {
         stdout.push_str(&format!("Open the URL above in a browser: {error}\n"));
     }
     let poll_request = json!({"Provider": KIRO_PLUGIN_IDENTIFIER, "State": state, "Host": host});
-    let deadline = Instant::now() + SOCIAL_LOGIN_TTL;
     while Instant::now() < deadline {
         let poll_raw = poll_kiro_login(&serde_json::to_vec(&poll_request).map_err(|error| {
             DispatchError {
@@ -203,7 +204,6 @@ pub(crate) fn execute_kiro_command_line(request: &[u8]) -> Result<Vec<u8>, Dispa
                 let Some(auth) = result.get("Auth").or_else(|| result.get("auth")).cloned() else {
                     return command_line_error("Kiro login succeeded without credentials");
                 };
-                let _ = callback.join();
                 return Ok(ok_envelope(json!({
                     "Stdout": base64::engine::general_purpose::STANDARD.encode(stdout.as_bytes()),
                     "Stderr": base64::engine::general_purpose::STANDARD.encode([]),
@@ -223,10 +223,9 @@ pub(crate) fn execute_kiro_command_line(request: &[u8]) -> Result<Vec<u8>, Dispa
             }
         }
     }
-    let _ = callback.join();
     Ok(ok_envelope(json!({
         "Stdout": base64::engine::general_purpose::STANDARD.encode(stdout.as_bytes()),
-        "Stderr": base64::engine::general_purpose::STANDARD.encode([]),
+        "Stderr": base64::engine::general_purpose::STANDARD.encode(b"Kiro login timed out waiting for the browser callback.\n"),
         "ExitCode": 1
     })))
 }
@@ -259,42 +258,117 @@ fn open_kiro_login_url(url: &str) -> Result<(), String> {
         .map_err(|error| format!("launch browser: {error}"))
 }
 
+/// Local sign-in callback server on `127.0.0.1:3128`.
+///
+/// Dropping it stops the accept loop and joins the worker, so every exit path
+/// of the login command releases the port without hanging.
+struct KiroCallbackListener {
+    stop: Arc<AtomicBool>,
+    handle: Option<thread::JoinHandle<()>>,
+}
+
+impl Drop for KiroCallbackListener {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+const CALLBACK_ACCEPT_POLL: Duration = Duration::from_millis(100);
+const CALLBACK_READ_TIMEOUT: Duration = Duration::from_secs(5);
+
 fn start_kiro_callback_listener(
     auth_dir: &Path,
     state: &str,
-) -> Result<thread::JoinHandle<()>, DispatchError> {
+    deadline: Instant,
+) -> Result<KiroCallbackListener, DispatchError> {
     let listener = TcpListener::bind("127.0.0.1:3128").map_err(|error| DispatchError {
         code: "login_failed",
         message: format!("listen for Kiro sign-in callback on 127.0.0.1:3128: {error}"),
     })?;
+    spawn_kiro_callback_listener(listener, auth_dir, state, deadline)
+}
+
+fn spawn_kiro_callback_listener(
+    listener: TcpListener,
+    auth_dir: &Path,
+    state: &str,
+    deadline: Instant,
+) -> Result<KiroCallbackListener, DispatchError> {
+    listener
+        .set_nonblocking(true)
+        .map_err(|error| DispatchError {
+            code: "login_failed",
+            message: format!("configure Kiro sign-in callback listener: {error}"),
+        })?;
     let callback_path = auth_dir.join(format!(".oauth-kiro-{state}.oauth"));
     let state = state.to_owned();
-    Ok(thread::spawn(move || {
-        if let Ok((mut stream, _)) = listener.accept() {
-            let mut request = [0_u8; 8192];
-            let length = stream.read(&mut request).unwrap_or_default();
-            let request = String::from_utf8_lossy(&request[..length]);
-            let target = request
-                .lines()
-                .next()
-                .and_then(|line| line.split_whitespace().nth(1))
-                .unwrap_or("/");
-            let query = target.split_once('?').map_or("", |(_, query)| query);
-            let callback_state = query_parameter(query, "state");
-            if callback_state == state {
-                let body = serde_json::to_vec(&json!({
-                    "code": query_parameter(query, "code"),
-                    "state": callback_state,
-                    "error": query_parameter(query, "error"),
-                    "login_option": query_parameter(query, "login_option")
-                }));
-                if let Ok(body) = body {
-                    let _ = fs::write(callback_path, body);
-                    let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nKiro login callback received. Return to the terminal.\n");
+    let stop = Arc::new(AtomicBool::new(false));
+    let worker_stop = Arc::clone(&stop);
+    let handle = thread::spawn(move || {
+        while !worker_stop.load(Ordering::SeqCst) && Instant::now() < deadline {
+            match listener.accept() {
+                Ok((stream, _)) => {
+                    if handle_kiro_callback_connection(stream, &state, &callback_path) {
+                        return;
+                    }
                 }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(CALLBACK_ACCEPT_POLL);
+                }
+                Err(_) => thread::sleep(CALLBACK_ACCEPT_POLL),
             }
         }
-    }))
+    });
+    Ok(KiroCallbackListener {
+        stop,
+        handle: Some(handle),
+    })
+}
+
+/// Handles one browser connection. Returns `true` once the matching callback
+/// has been written; unrelated requests (favicon, preconnect, stale state) get
+/// a 404 and leave the listener running.
+fn handle_kiro_callback_connection(
+    mut stream: std::net::TcpStream,
+    state: &str,
+    callback_path: &Path,
+) -> bool {
+    // Accepted sockets can inherit non-blocking mode from the listener on BSD.
+    let _ = stream.set_nonblocking(false);
+    let _ = stream.set_read_timeout(Some(CALLBACK_READ_TIMEOUT));
+    let mut request = [0_u8; 8192];
+    let length = stream.read(&mut request).unwrap_or_default();
+    let request = String::from_utf8_lossy(&request[..length]);
+    let target = request
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .unwrap_or("/");
+    let query = target.split_once('?').map_or("", |(_, query)| query);
+    let callback_state = query_parameter(query, "state");
+    if callback_state != state {
+        let _ = stream
+            .write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+        return false;
+    }
+    let body = serde_json::to_vec(&json!({
+        "code": query_parameter(query, "code"),
+        "state": callback_state,
+        "error": query_parameter(query, "error"),
+        "login_option": query_parameter(query, "login_option")
+    }));
+    let Ok(body) = body else {
+        return false;
+    };
+    if fs::write(callback_path, body).is_err() {
+        let _ = stream.write_all(b"HTTP/1.1 500 Internal Server Error\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nKiro login callback could not be saved. Check the terminal.\n");
+        return false;
+    }
+    let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nKiro login callback received. Return to the terminal.\n");
+    true
 }
 
 fn query_parameter(query: &str, key: &str) -> String {
@@ -312,8 +386,10 @@ fn percent_decode(value: &str) -> String {
     let mut index = 0;
     while index < bytes.len() {
         if bytes[index] == b'%' && index + 2 < bytes.len() {
-            if let Ok(decoded) = u8::from_str_radix(&value[index + 1..index + 3], 16) {
-                output.push(decoded);
+            let high = (bytes[index + 1] as char).to_digit(16);
+            let low = (bytes[index + 2] as char).to_digit(16);
+            if let (Some(high), Some(low)) = (high, low) {
+                output.push((high * 16 + low) as u8);
                 index += 3;
                 continue;
             }
@@ -976,7 +1052,70 @@ fn login_error_envelope(action: &str, error: &HostHttpError) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::social_token_redirect_uri;
+    use super::{percent_decode, social_token_redirect_uri, spawn_kiro_callback_listener};
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::time::{Duration, Instant};
+
+    fn send_callback_request(port: u16, target: &str) -> String {
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect to listener");
+        stream
+            .write_all(format!("GET {target} HTTP/1.1\r\nHost: localhost\r\n\r\n").as_bytes())
+            .expect("write request");
+        let mut response = String::new();
+        let _ = stream.read_to_string(&mut response);
+        response
+    }
+
+    #[test]
+    fn callback_listener_ignores_stray_requests_until_matching_state() {
+        let auth_dir = std::env::temp_dir().join(format!("kiro-login-test-{}", std::process::id()));
+        std::fs::create_dir_all(&auth_dir).expect("auth dir");
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let callback = spawn_kiro_callback_listener(listener, &auth_dir, "good-state", deadline)
+            .expect("spawn listener");
+
+        assert!(send_callback_request(port, "/favicon.ico").starts_with("HTTP/1.1 404"));
+        assert!(
+            send_callback_request(port, "/oauth/callback?state=stale&code=x")
+                .starts_with("HTTP/1.1 404")
+        );
+        let accepted = send_callback_request(port, "/oauth/callback?state=good-state&code=abc%2F1");
+        assert!(accepted.starts_with("HTTP/1.1 200"), "{accepted}");
+        drop(callback);
+
+        let saved =
+            std::fs::read(auth_dir.join(".oauth-kiro-good-state.oauth")).expect("saved callback");
+        let saved: serde_json::Value = serde_json::from_slice(&saved).expect("callback JSON");
+        assert_eq!(saved["code"], "abc/1");
+        let _ = std::fs::remove_dir_all(&auth_dir);
+    }
+
+    #[test]
+    fn callback_listener_drop_returns_promptly_without_any_connection() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let deadline = Instant::now() + Duration::from_secs(600);
+        let callback = spawn_kiro_callback_listener(
+            listener,
+            &std::env::temp_dir(),
+            "never-arrives",
+            deadline,
+        )
+        .expect("spawn listener");
+        let started = Instant::now();
+        drop(callback);
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn percent_decode_tolerates_malformed_and_multibyte_input() {
+        assert_eq!(percent_decode("a%2Fb+c"), "a/b c");
+        assert_eq!(percent_decode("%é%"), "%é%");
+        assert_eq!(percent_decode("%zz"), "%zz");
+        assert_eq!(percent_decode("%E2%9C%93"), "✓");
+    }
 
     #[test]
     fn social_token_redirect_uri_matches_kiro_callback_path() {

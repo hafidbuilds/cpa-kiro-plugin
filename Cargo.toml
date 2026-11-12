@@ -16,6 +16,10 @@ path = "tests/abi-shell.rs"
 name = "compatibility-behavior"
 path = "tests/compatibility-behavior.rs"
 
+[[test]]
+name = "stream-backpressure"
+path = "tests/stream-backpressure.rs"
+
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

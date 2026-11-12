@@ -11,6 +11,7 @@ const OIDC_USER_AGENT: &str =
     "aws-sdk-js/3.714.0 os/macos/24.3.0 lang/js md/nodejs/22.14.0 api/ssooidc/3.714.0 exec-env/kiro-cli/2.7.0 m/E";
 
 /// Structured dispatch failure serialized at the CPA boundary.
+#[derive(Debug)]
 pub struct DispatchError {
     /// Stable error code used by CPA.
     pub code: &'static str,
@@ -307,11 +308,19 @@ pub(super) fn query_escape(value: &str) -> String {
 
 pub(super) fn limited_error_body(body: &[u8]) -> String {
     let text = String::from_utf8_lossy(body).trim().to_owned();
-    if text.len() > 1024 {
-        text[..1024].to_owned()
-    } else {
-        text
+    truncate_at_char_boundary(&text, 1024).to_owned()
+}
+
+/// Returns at most `max_bytes` of `text` without splitting a UTF-8 character.
+pub(super) fn truncate_at_char_boundary(text: &str, max_bytes: usize) -> &str {
+    if text.len() <= max_bytes {
+        return text;
     }
+    let mut end = max_bytes;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
 }
 
 pub(super) fn redact_url(endpoint: &str) -> String {
@@ -699,5 +708,24 @@ struct KiroPluginConfigModels;
 impl KiroPluginConfigModels {
     fn default_models() -> Vec<String> {
         vec!["claude-sonnet-4.5".into(), "claude-haiku-4.5".into()]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{limited_error_body, truncate_at_char_boundary};
+
+    #[test]
+    fn limited_error_body_does_not_split_multibyte_characters() {
+        // 1023 ASCII bytes, then a 3-byte character straddling the 1024 limit.
+        let body = format!("{}✓ trailing detail", "a".repeat(1023));
+        let limited = limited_error_body(body.as_bytes());
+        assert_eq!(limited, "a".repeat(1023));
+    }
+
+    #[test]
+    fn truncate_at_char_boundary_keeps_short_text_whole() {
+        assert_eq!(truncate_at_char_boundary("héllo", 1024), "héllo");
+        assert_eq!(truncate_at_char_boundary("héllo", 2), "h");
     }
 }

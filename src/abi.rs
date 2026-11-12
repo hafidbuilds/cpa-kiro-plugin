@@ -134,13 +134,24 @@ pub unsafe fn call_plugin_method(
         // SAFETY: CPA owns a readable request buffer for this call duration.
         unsafe { slice::from_raw_parts(request, request_len) }
     };
-    match dispatch::dispatch_method(method, request) {
-        Ok(raw) => {
+    // A panic must never unwind across the C ABI: that aborts the whole CPA
+    // process and takes every other provider down with it.
+    let outcome = std::panic::catch_unwind(|| dispatch::dispatch_method(method, request));
+    match outcome {
+        Ok(Ok(raw)) => {
             write_plugin_buffer(response, &raw);
             0
         }
-        Err(error) => {
+        Ok(Err(error)) => {
             write_error(response, error.code, &error.message);
+            1
+        }
+        Err(_) => {
+            write_error(
+                response,
+                "plugin_panic",
+                &format!("Kiro plugin panicked while handling {method}"),
+            );
             1
         }
     }
@@ -162,6 +173,7 @@ fn write_error(response: *mut cliproxy_buffer, code: &str, message: &str) {
         "model_not_found" => 404,
         "rate_limit" => 429,
         "executor_error" => 502,
+        "plugin_panic" => 500,
         _ => 0,
     };
     let raw = serde_json::json!({
@@ -263,7 +275,7 @@ pub(crate) fn invoke_host_json(method: &str, payload: &[u8]) -> Result<Vec<u8>, 
 
 /// Drops process-local callback state after CPA shutdown.
 pub fn shutdown_plugin() {
-    crate::dispatch::clear_pending_kiro_logins();
+    let _ = std::panic::catch_unwind(crate::dispatch::clear_pending_kiro_logins);
     if let Ok(mut host) = HOST_API.lock() {
         let _ = host.take();
     }
