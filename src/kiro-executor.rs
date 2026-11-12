@@ -72,7 +72,7 @@ pub fn execute_kiro_request(request: &[u8]) -> Result<Vec<u8>, String> {
             .as_ref()
             .cloned()
             .unwrap_or_else(KiroExecutorFailure::unknown);
-        if emitted || !failure.retryable() || attempt == MAX_UPSTREAM_ATTEMPTS {
+        if emitted || !failure.retry_in_plugin() || attempt == MAX_UPSTREAM_ATTEMPTS {
             return Ok(upstream_error_envelope(&failure));
         }
     }
@@ -184,7 +184,7 @@ pub fn execute_kiro_stream_request(request: &[u8]) -> Result<Vec<u8>, String> {
                 break;
             }
             Err(error) => {
-                let retryable = error.retryable();
+                let retryable = error.retry_in_plugin();
                 last_error = Some(error);
                 if !retryable || attempt == MAX_UPSTREAM_ATTEMPTS {
                     return Ok(upstream_error_envelope(
@@ -489,8 +489,11 @@ fn plugin_error_envelope(
     if retryable {
         error.insert("retryable".into(), json!(true));
     }
-    if retry_after_ms != 0 {
-        error.insert("retry_after_ms".into(), json!(retry_after_ms));
+    if retry_after_ms > 0 {
+        // CPA's pluginabi.Error reads whole seconds from `retry_after_seconds`;
+        // round up so a sub-second hint still delays the retry.
+        let seconds = (retry_after_ms + 999) / 1000;
+        error.insert("retry_after_seconds".into(), json!(seconds));
     }
     if credential_scoped {
         error.insert("credential_scoped".into(), json!(true));
@@ -728,12 +731,16 @@ mod tests {
         assert_eq!(failure.status, 429);
         assert!(!failure.credential_scoped);
         assert!(failure.retryable());
+        assert!(
+            !failure.retry_in_plugin(),
+            "a 429 must go back to CPA, not be re-sent at once"
+        );
         assert_eq!(failure.retry_after_ms, 7000);
         let envelope: Value =
             serde_json::from_slice(&super::upstream_error_envelope(&failure)).expect("json");
         assert_eq!(envelope["error"]["code"], "rate_limited");
         assert_eq!(envelope["error"]["retryable"], true);
-        assert_eq!(envelope["error"]["retry_after_ms"], 7000);
+        assert_eq!(envelope["error"]["retry_after_seconds"], 7);
     }
 
     #[test]
@@ -769,7 +776,7 @@ mod tests {
             serde_json::from_slice(&super::upstream_error_envelope(&failure)).expect("json");
         assert_eq!(envelope["error"]["code"], "quota_exhausted");
         assert_eq!(envelope["error"]["http_status"], 429);
-        assert_eq!(envelope["error"]["retry_after_ms"], 1_900_800_000);
+        assert_eq!(envelope["error"]["retry_after_seconds"], 1_900_800);
         assert_eq!(envelope["error"]["credential_scoped"], true);
         assert_eq!(envelope["error"].get("retryable"), None);
     }
@@ -786,7 +793,7 @@ mod tests {
         assert_eq!(envelope["error"]["code"], "upstream_error");
         assert_eq!(envelope["error"]["http_status"], 400);
         assert_eq!(envelope["error"].get("retryable"), None);
-        assert_eq!(envelope["error"].get("retry_after_ms"), None);
+        assert_eq!(envelope["error"].get("retry_after_seconds"), None);
         assert_eq!(envelope["error"].get("credential_scoped"), None);
         assert!(envelope["error"]["message"]
             .as_str()

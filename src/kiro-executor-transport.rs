@@ -67,6 +67,13 @@ impl KiroExecutorFailure {
         }
     }
 
+    /// Whether the plugin itself should retry at once. Only transport and 5xx
+    /// failures qualify: an immediate retry of a 429 doubles the pressure Kiro
+    /// is complaining about, so 429 backoff and failover are left to CPA.
+    pub(super) fn retry_in_plugin(&self) -> bool {
+        self.retryable() && self.status != 429
+    }
+
     pub(super) fn retryable(&self) -> bool {
         if self.classified && self.reason == REASON_MONTHLY_REQUEST_COUNT {
             return false;
@@ -196,7 +203,7 @@ pub(super) fn run_kiro_plugin_stream(
             Err(error) => {
                 if client_emitted
                     || emitted
-                    || !error.retryable()
+                    || !error.retry_in_plugin()
                     || attempt == MAX_UPSTREAM_ATTEMPTS
                 {
                     return Some(error.message);
