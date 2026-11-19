@@ -562,10 +562,7 @@ impl ClaudeSseWriter {
                 "output_tokens": 0
             }
         });
-        marshal_claude_sse_event(
-            "message_start",
-            &json!({"type": "message_start", "message": message}),
-        )
+        marshal_claude_sse_event(&json!({"type": "message_start", "message": message}))
     }
 
     /// Emits Claude content-block SSE frames for newly completed blocks.
@@ -622,23 +619,17 @@ impl ClaudeSseWriter {
             self.open_type = block_type.to_owned();
             self.open_index = self.block_index;
             self.block_index += 1;
-            frames.extend(marshal_claude_sse_event(
-                "content_block_start",
-                &json!({
-                    "type": "content_block_start",
-                    "index": self.open_index,
-                    "content_block": content_block
-                }),
-            )?);
-        }
-        frames.extend(marshal_claude_sse_event(
-            "content_block_delta",
-            &json!({
-                "type": "content_block_delta",
+            frames.extend(marshal_claude_sse_event(&json!({
+                "type": "content_block_start",
                 "index": self.open_index,
-                "delta": delta
-            }),
-        )?);
+                "content_block": content_block
+            }))?);
+        }
+        frames.extend(marshal_claude_sse_event(&json!({
+            "type": "content_block_delta",
+            "index": self.open_index,
+            "delta": delta
+        }))?);
         Ok(frames)
     }
 
@@ -648,10 +639,7 @@ impl ClaudeSseWriter {
         }
         let index = self.open_index;
         self.open_type.clear();
-        marshal_claude_sse_event(
-            "content_block_stop",
-            &json!({"type": "content_block_stop", "index": index}),
-        )
+        marshal_claude_sse_event(&json!({"type": "content_block_stop", "index": index}))
     }
 
     /// Emits the final stop, usage, and `message_stop` SSE frames.
@@ -660,24 +648,18 @@ impl ClaudeSseWriter {
         accumulator: &ClaudeResponseAccumulator,
     ) -> Result<Vec<Vec<u8>>, KiroEventStreamError> {
         let mut frames = self.close_open_block()?;
-        frames.extend(marshal_claude_sse_event(
-            "message_delta",
-            &json!({
-                "type": "message_delta",
-                "delta": {
-                    "stop_reason": accumulator.stop_reason,
-                    "stop_sequence": Value::Null
-                },
-                "usage": {
-                    "input_tokens": accumulator.input_tokens,
-                    "output_tokens": accumulator.output_tokens
-                }
-            }),
-        )?);
-        frames.extend(marshal_claude_sse_event(
-            "message_stop",
-            &json!({"type": "message_stop"}),
-        )?);
+        frames.extend(marshal_claude_sse_event(&json!({
+            "type": "message_delta",
+            "delta": {
+                "stop_reason": accumulator.stop_reason,
+                "stop_sequence": Value::Null
+            },
+            "usage": {
+                "input_tokens": accumulator.input_tokens,
+                "output_tokens": accumulator.output_tokens
+            }
+        }))?);
+        frames.extend(marshal_claude_sse_event(&json!({"type": "message_stop"}))?);
         Ok(frames)
     }
 }
@@ -687,35 +669,26 @@ fn marshal_claude_complete_content_block(
     content_block: &Value,
     delta: &Value,
 ) -> Result<Vec<Vec<u8>>, KiroEventStreamError> {
-    let mut frames = marshal_claude_sse_event(
-        "content_block_start",
-        &json!({
-            "type": "content_block_start",
-            "index": index,
-            "content_block": content_block
-        }),
-    )?;
+    let mut frames = marshal_claude_sse_event(&json!({
+        "type": "content_block_start",
+        "index": index,
+        "content_block": content_block
+    }))?;
+    frames.extend(marshal_claude_sse_event(&json!({
+        "type": "content_block_delta",
+        "index": index,
+        "delta": delta
+    }))?);
     frames.extend(marshal_claude_sse_event(
-        "content_block_delta",
-        &json!({
-            "type": "content_block_delta",
-            "index": index,
-            "delta": delta
-        }),
-    )?);
-    frames.extend(marshal_claude_sse_event(
-        "content_block_stop",
         &json!({"type": "content_block_stop", "index": index}),
     )?);
     Ok(frames)
 }
 
-fn marshal_claude_sse_event(
-    event: &str,
-    value: &Value,
-) -> Result<Vec<Vec<u8>>, KiroEventStreamError> {
+fn marshal_claude_sse_event(value: &Value) -> Result<Vec<Vec<u8>>, KiroEventStreamError> {
     let raw = serde_json::to_string(value).map_err(KiroEventStreamError::ClaudeSseJson)?;
-    Ok(vec![format!("event: {event}\ndata: {raw}\n\n").into_bytes()])
+    // CPA's cross-format translators consume data lines, not event-prefixed frames.
+    Ok(vec![format!("data: {raw}\n\n").into_bytes()])
 }
 
 fn estimate_approx_tokens(text: &str) -> i64 {

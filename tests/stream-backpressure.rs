@@ -266,10 +266,18 @@ fn execute_stream_returns_before_draining_and_delivers_every_chunk() {
     // CPA starts draining only now, after the call returned.
     let mut chunks = 0;
     let mut sse = String::new();
+    let mut text = String::new();
     let close_error = loop {
         match output.recv_timeout(Duration::from_secs(10)) {
             Ok(Output::Chunk(bytes)) => {
                 chunks += 1;
+                // Mirror CPA's Claude-to-Responses input contract, then verify
+                // the generated text survives instead of becoming an empty stream.
+                let data = bytes.strip_prefix(b"data: ").expect("CPA data-line input");
+                let event: Value = serde_json::from_slice(data).expect("Claude event JSON");
+                if event["type"] == "content_block_delta" {
+                    text.push_str(event["delta"]["text"].as_str().expect("text delta"));
+                }
                 sse.push_str(&String::from_utf8_lossy(&bytes));
             }
             Ok(Output::Close(error)) => break error,
@@ -283,8 +291,9 @@ fn execute_stream_returns_before_draining_and_delivers_every_chunk() {
         chunks > CPA_STREAM_BUFFER,
         "expected more than {CPA_STREAM_BUFFER} chunks to exercise backpressure, got {chunks}"
     );
-    assert!(sse.contains("event: message_start"), "{sse}");
-    assert!(sse.contains("event: message_stop"), "{sse}");
+    assert!(sse.contains(r#""type":"message_start""#), "{sse}");
+    assert!(sse.contains(r#""type":"message_stop""#), "{sse}");
+    assert_eq!(text, "hello".repeat(UPSTREAM_EVENTS));
     assert!(
         FAKE_HOST
             .lock()

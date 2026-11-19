@@ -363,17 +363,17 @@ mod tests {
         let mut writer = ClaudeSseWriter::new();
         let start =
             String::from_utf8(writer.start(&accumulator).expect("start")[0].clone()).expect("utf8");
-        assert!(start.contains("event: message_start"));
+        assert!(start.contains(r#""type":"message_start""#));
         assert!(start.contains("\"input_tokens\":21000"));
         let finish = writer.finish(&accumulator).expect("finish frames");
         let joined = finish
             .iter()
             .map(|frame| String::from_utf8_lossy(frame).into_owned())
             .collect::<String>();
-        assert!(joined.contains("event: message_delta"));
+        assert!(joined.contains(r#""type":"message_delta""#));
         assert!(joined.contains("\"stop_reason\":\"end_turn\""));
         assert!(joined.contains("\"output_tokens\":"));
-        assert!(joined.contains("event: message_stop"));
+        assert!(joined.contains(r#""type":"message_stop""#));
     }
 
     #[test]
@@ -400,8 +400,8 @@ mod tests {
             .collect::<String>();
         assert!(frames.contains(r#""id":"toolu_stable""#));
         assert!(frames.contains("input_json_delta"));
-        assert_eq!(frames.matches("event: content_block_start").count(), 1);
-        assert_eq!(frames.matches("event: content_block_stop").count(), 1);
+        assert_eq!(frames.matches(r#""type":"content_block_start""#).count(), 1);
+        assert_eq!(frames.matches(r#""type":"content_block_stop""#).count(), 1);
         assert_eq!(accumulator.stop_reason, "tool_use");
     }
 }

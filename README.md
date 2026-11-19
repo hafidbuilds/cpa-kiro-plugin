@@ -57,6 +57,10 @@ Use exact model IDs instead of `"*"` to disable account model discovery:
 
 Restart CLIProxyAPI after you add or rebuild the plugin.
 
+The plugin emits data-only Claude SSE chunks for CPA's translator input contract.
+This keeps streaming output compatible with Responses clients such as Pi; an
+`event:` prefix on each plugin chunk would cause that translator to drop it.
+
 ### Multiple accounts and pacing
 
 Kiro throttles bursts on one account with `USER_REQUEST_RATE_EXCEEDED`, even
